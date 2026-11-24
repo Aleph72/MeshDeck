@@ -327,7 +327,7 @@ void task(void *)
         bool ok = credentials && refresh(credentials) && infer(credentials);
         if (ok) {
             snprintf(previousPrompt, 768, "%s", currentPrompt);
-            say("Risposta ricevuta con il tuo piano ChatGPT.");
+            say("Risposta ricevuta.");
             stateValue.store(2);
         } else if (stateValue.load() == 1)
             fail("Connessione ChatGPT non completata. Riprova.");
@@ -496,7 +496,7 @@ bool ask(const char *text)
     snprintf(currentPrompt, 768, "%s", text);
     stateValue.store(1);
     workerActive.store(true);
-    say("Connessione al tuo piano ChatGPT...");
+    say("Connessione a ChatGPT...");
     pendingAsk.store(true, std::memory_order_release);
     return true;
 }
