@@ -1,0 +1,45 @@
+
+#include <cassert>
+#include <atomic>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <iterator>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <cctype>
+#include "util/RepeaterData.h"
+#include "util/OpenAIReply.h"
+struct Stream { virtual size_t write(uint8_t)=0; virtual size_t write(const uint8_t*,size_t)=0; virtual int available()=0; virtual int read()=0; virtual int peek()=0; virtual void flush()=0; virtual ~Stream()=default; };
+static std::vector<RepeaterRecord> records;
+static std::atomic<bool> cancel{false};
+static std::atomic<unsigned> received{0}, skipped{0};
+static int queue=0;
+constexpr int MALLOC_CAP_SPIRAM=0, pdTRUE=1;
+#define pdMS_TO_TICKS(x) (x)
+void *heap_caps_malloc(size_t n,int) { return malloc(n); }
+int xQueueSend(int,const RepeaterRecord *r,int) { records.push_back(*r); return pdTRUE; }
+// @REPEATER_IMPLEMENTATION@
+int main(int argc,char **argv) {
+ char out[32];
+ assert(openaiReplyText(R"({"output":[{"type":"message","content":[{"type":"output_text","text":"Ciao, perch\u00e9?"}]}]})",out,sizeof(out)));
+ assert(std::string(out)=="Ciao, perché?");
+ assert(!openaiReplyText(R"({"error":{"message":"sk-test-secret"}})",out,sizeof(out))); assert(out[0]==0);
+ assert(!openaiReplyText("broken json",out,sizeof(out)));
+ assert(!openaiReplyText(R"({"output":[{"type":"function_call","arguments":"hidden"}]})",out,sizeof(out)));
+ assert(openaiReplyText(R"({"output":[{"type":"message","content":[{"type":"refusal","refusal":"No"}]}]})",out,sizeof(out)) && std::string(out)=="No");
+ struct Guard { char left='L'; char out[4]={}; char right='R'; } guard;
+ assert(openaiReplyText(R"({"output":[{"type":"message","content":[{"type":"output_text","text":"\u20acX"}]}]})",guard.out,4));
+ assert(std::string(guard.out)=="€" && guard.left=='L' && guard.right=='R');
+ assert(!openaiReplyText("{}",out,0));
+ RepeaterStream invalid; assert(invalid.write((const uint8_t*)"{}",2)==0 && !invalid.valid);
+ std::ifstream file(argv[1]); std::string json((std::istreambuf_iterator<char>(file)),{}); assert(!json.empty());
+ RepeaterStream stream;
+ for(size_t i=0;i<json.size();) {size_t n=std::min((size_t)257,json.size()-i); assert(stream.write((const uint8_t*)json.data()+i,n)==n);i+=n;}
+ assert(stream.valid && stream.started && stream.ended); assert(!records.empty()); assert(records.size()+skipped.load()==strtoul(argv[2],nullptr,10));
+ for(auto &r:records) {assert(r.callsign[0] && r.callsign[15]==0);assert(r.latitudeE7>=-900000000 && r.latitudeE7<=900000000);}
+ RepeaterRecord bad; assert(!recordFromJSON(R"({"callsign":"TEST","latitude":999,"longitude":0,"frequency":145000000})",bad));
+ printf("PASS: OpenAI bounded text parsing, UTF-8 and refusal/error handling; HearHam chunked streaming %zu valid records, %u skipped.\n",records.size(),skipped.load());
+}

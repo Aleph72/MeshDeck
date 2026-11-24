@@ -9,6 +9,7 @@
 #include "HTTPClient.h" // not available on Linux/Portduino
 #include "WiFi.h"
 #include "WiFiClientSecure.h"
+#include "util/HttpBodyBuffer.h"
 
 // from ConvertPNG.c
 extern "C" {
@@ -125,7 +126,7 @@ bool URLService::load(const char *name, void *img)
     };
     bool began;
     if (tls) {
-        // https tile servers (Google, USGS): TLS without cert pinning — it's public
+        // https tile servers (Google, USGS): TLS without cert pinning - it's public
         // map data, and the S3 has no room for a CA bundle here.
         secureClient.setInsecure();
         secureClient.setHandshakeTimeout(6); // on the UI task: 6s, not 15 (the default 120s outlives the watchdog)
@@ -142,71 +143,41 @@ bool URLService::load(const char *name, void *img)
     if (httpCode != HTTP_CODE_OK) {
         ILOG_ERROR("ERROR GET %s : %d", url.c_str(), httpCode);
         hangUp();
-        if (httpCode >= 400 && httpCode < 500 && zoom >= 0 && zoom < 32 && s_zoomMisses[zoom] < 3 &&
-            ++s_zoomMisses[zoom] == 3)
+        if (httpCode >= 400 && httpCode < 500 && zoom >= 0 && zoom < 32 && s_zoomMisses[zoom] < 3 && ++s_zoomMisses[zoom] == 3)
             ILOG_INFO("tile server has nothing at z%d - not asking again this session", zoom);
         return false;
     }
     if (zoom >= 0 && zoom < 32)
         s_zoomMisses[zoom] = 0;
 
-    WiFiClient *stream = http.getStreamPtr();
     int contentLen = http.getSize();
-    if (contentLen <= 0) {
-        ILOG_WARN("GET %s : empty", url.c_str());
+    if (contentLen == 0 || contentLen < -1 || contentLen > 262144) {
+        ILOG_WARN("GET %s : invalid size %d", url.c_str(), contentLen);
         hangUp();
         return false;
     }
 
-    size_t len = (size_t)contentLen;
+    size_t capacity = contentLen < 0 ? 262144 : (size_t)contentLen;
 
-    uint8_t *pngImage = (uint8_t *)lv_malloc(len);
+    uint8_t *pngImage = (uint8_t *)lv_malloc(capacity);
     LvFreeGuard pngGuard{pngImage};
     if (!pngImage) {
-        ILOG_ERROR("lv_malloc failed for %s (%u bytes)", url.c_str(), (unsigned int)len);
+        ILOG_ERROR("lv_malloc failed for %s (%u bytes)", url.c_str(), (unsigned int)capacity);
         hangUp();
         return false;
     }
 
-    // read .png file in chunks to increase reliability (avoid readBytes())
-    // Up to 1.5s of silence mid-tile. It was 15ms: a server a little slow to start the body got
-    // hung up on after the handshake had already been paid for ("0 != 19052" in the stress log),
-    // and the retry paid for the whole thing again.
-    size_t bytesRead = 0;
-    uint16_t idleSpins = 0;
-    const uint16_t maxIdleSpins = 300;
-    while (bytesRead < len) {
-        size_t available = stream->available();
-        if (available == 0) {
-            if (++idleSpins > maxIdleSpins) {
-                break;
-            }
-            delay(5);
-            continue;
-        }
-
-        idleSpins = 0;
-        size_t toRead = available;
-        size_t remaining = len - bytesRead;
-        if (toRead > remaining) {
-            toRead = remaining;
-        }
-
-        int got = stream->read(pngImage + bytesRead, toRead);
-        if (got <= 0) {
-            break;
-        }
-        bytesRead += (size_t)got;
-    }
-
-    if (bytesRead != len) {
-        ILOG_ERROR("http read error %s : %u != %u", url.c_str(), (unsigned int)bytesRead, (unsigned int)len);
+    HttpBodyBuffer body(pngImage, capacity);
+    int bytesRead = http.writeToStream(&body);
+    if (bytesRead <= 0 || body.overflowed() || (contentLen >= 0 && bytesRead != contentLen) || (size_t)bytesRead != body.size()) {
+        ILOG_ERROR("http read error %s : %d (expected %d)", url.c_str(), bytesRead, contentLen);
         hangUp();
         return false;
     }
     http.end(); // the whole tile is in: the line stays open for the next one
 
-    ILOG_DEBUG("SUCCESS(%d): GET %s (%u bytes)", (int)idleSpins, url.c_str(), (unsigned int)len);
+    size_t len = body.size();
+    ILOG_DEBUG("SUCCESS: GET %s (%u bytes)", url.c_str(), (unsigned int)len);
 
     // save png tile to SD card
     if (saveCB && MapTileSettings::saveOK()) {

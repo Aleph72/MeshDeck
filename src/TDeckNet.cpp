@@ -1,32 +1,35 @@
 // -----------------------------------------------------------------------------
-// TDeckNet — the "internet door" for Lua apps (firmware side).
+// TDeckNet - the "internet door" for Lua apps (firmware side).
 //
 // Lets an app fetch a URL over Wi-Fi WITHOUT freezing the screen and WITHOUT the
 // Wi-Fi/Bluetooth crash. The app never blocks: it calls net.fetch(url), keeps
 // drawing, and checks net.status()/net.body() on later frames.
 //
 // THREADING: the LVGL/app task must not drive the radio (Wi-Fi/BT) or block on a
-// network read — that is exactly what froze the device before. So the app-facing
+// network read - that is exactly what froze the device before. So the app-facing
 // calls only RECORD intent and READ results; tdeck_net_service(), called from the
 // main loop(), does the real work on the safe thread as a non-blocking state
 // machine. Same deferred pattern as TDeckMeshSwitch / TDeckGpsControl / TDeckClockFormat.
 //
 // Wi-Fi and Bluetooth share the one 2.4GHz radio on the ESP32-S3, and bringing Wi-Fi
 // up while BT is live is what caused the watchdog reboots (the open Get-Apps/BT freeze
-// bug). So this shuts Bluetooth down FIRST. BT stays down until the next reboot — the
+// bug). So this shuts Bluetooth down FIRST. BT stays down until the next reboot - the
 // chip can't run both well at once, and cleanly re-enabling BT afterwards is a follow-up.
 // -----------------------------------------------------------------------------
 #include "configuration.h"
 
 #if HAS_WIFI
 #include "NodeDB.h" // config.network.wifi_ssid / wifi_psk
+#include "OpenAICertificate.h"
+#include "util/HttpBodyBuffer.h"
 #include <HTTPClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <ctype.h>
 #include <esp_heap_caps.h>
 #endif
 
-// The launcher's on-demand Wi-Fi bridge (src/TDeckWifi.cpp) — reuse it rather than
+// The launcher's on-demand Wi-Fi bridge (src/TDeckWifi.cpp) - reuse it rather than
 // duplicate WiFi.begin/status/off.
 extern "C" bool tdeck_wifi_connect_now(const char *ssid, const char *psk);
 extern "C" void tdeck_wifi_disconnect_now(void);
@@ -34,6 +37,9 @@ extern "C" bool tdeck_wifi_connected(void);
 // Shut Bluetooth down before Wi-Fi comes up (defined in src/modules/AdminModule.cpp).
 // Safe to call even if BT is already down (deinit is a no-op then).
 void disableBluetooth();
+extern "C" bool tdeck_network_job_acquire(int);
+extern "C" void tdeck_network_job_release(int);
+static bool s_ownsNetworkJob = false;
 
 // -----------------------------------------------------------------------------
 // The TLS memory reserve.
@@ -118,7 +124,8 @@ extern "C" void tdeck_tls_report_alloc_fail(void)
     }
     LOG_INFO("tls: LAST FAILED ALLOC = %u bytes, caps=0x%08x, %u failure(s) total", (unsigned)s_lastFailSize,
              (unsigned)s_lastFailCaps, (unsigned)s_failCount);
-    LOG_INFO("tls: largest internal block available was %u", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    LOG_INFO("tls: largest internal block available was %u",
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     s_failCount = 0;
 #endif
 }
@@ -174,8 +181,8 @@ extern "C" void tdeck_tls_reserve_release(void)
         return;
     }
     // Safe to log here: this only runs from the UI, long after the console is up.
-    LOG_INFO("tls reserve: released %u bytes in %d blocks, largest internal block now %u", (unsigned)freed,
-             kTlsBlocks, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    LOG_INFO("tls reserve: released %u bytes in %d blocks, largest internal block now %u", (unsigned)freed, kTlsBlocks,
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
 #endif
 }
 
@@ -217,6 +224,49 @@ extern "C" bool tdeck_net_fetch(const char *url); // defined below; the POST wra
 static char *s_postBody = nullptr;
 static char s_postType[48] = {0};
 static int s_httpCode = 0; // last HTTP status, so a caller can tell 404 from 429
+static char s_openAIKey[512] = {};
+static bool s_openAIRequest = false;
+static bool netQueueFetch(const char *url);
+
+// Fixed origin, verified TLS, and no credential-bearing URL or error-body logging.
+extern "C" bool tdeck_net_openai_post(const char *body, const char *key)
+{
+#if HAS_WIFI
+    if (!body || !key || !*key || strlen(key) >= sizeof(s_openAIKey) || s_pending || s_state == NET_START ||
+        s_state == NET_CONNECTING || s_state == NET_FETCH || !config.network.wifi_ssid[0])
+        return false;
+    for (const char *p = key; *p; p++) {
+        if (!(isalnum((unsigned char)*p) || *p == '-' || *p == '_'))
+            return false;
+    }
+    size_t n = strlen(body);
+    if (n > 8192)
+        return false;
+    if (!tdeck_network_job_acquire(1))
+        return false;
+    char *copy = (char *)heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM);
+    if (!copy) {
+        tdeck_network_job_release(1);
+        return false;
+    }
+    s_ownsNetworkJob = true;
+    memcpy(copy, body, n + 1);
+    if (s_postBody)
+        free(s_postBody);
+    s_postBody = copy;
+    snprintf(s_postType, sizeof(s_postType), "application/json");
+    snprintf(s_openAIKey, sizeof(s_openAIKey), "%s", key);
+    snprintf(s_url, sizeof(s_url), "https://api.openai.com/v1/responses");
+    s_openAIRequest = true;
+    s_httpCode = 0;
+    s_pending = true; // Publish only after all request data is ready.
+    return true;
+#else
+    (void)body;
+    (void)key;
+    return false;
+#endif
+}
 
 // Queue a POST instead of a GET. Same state machine, same TLS reserve, same client - see the
 // note in the fetch below about why there must not be a second TLS path on this device.
@@ -224,6 +274,10 @@ extern "C" bool tdeck_net_post(const char *url, const char *body, const char *co
 {
     if (!url || !body)
         return false;
+    if (s_pending || s_state == NET_START || s_state == NET_CONNECTING || s_state == NET_FETCH)
+        return false;
+    s_openAIRequest = false;
+    memset(s_openAIKey, 0, sizeof(s_openAIKey));
     if (s_postBody) {
         free(s_postBody);
         s_postBody = nullptr;
@@ -234,10 +288,10 @@ extern "C" bool tdeck_net_post(const char *url, const char *body, const char *co
         return false;
     memcpy(s_postBody, body, n + 1);
     snprintf(s_postType, sizeof(s_postType), "%s", contentType ? contentType : "application/json");
-    return tdeck_net_fetch(url);
+    return netQueueFetch(url);
 }
 
-extern "C" bool tdeck_net_fetch(const char *url)
+static bool netQueueFetch(const char *url)
 {
 #if HAS_WIFI
     if (!url || !url[0])
@@ -246,6 +300,9 @@ extern "C" bool tdeck_net_fetch(const char *url)
         return false; // busy
     if (config.network.wifi_ssid[0] == 0)
         return false; // no saved network
+    if (!tdeck_network_job_acquire(1))
+        return false;
+    s_ownsNetworkJob = true;
     strncpy(s_url, url, sizeof(s_url) - 1);
     s_url[sizeof(s_url) - 1] = 0;
     s_pending = true; // handed to the main-loop service
@@ -254,6 +311,19 @@ extern "C" bool tdeck_net_fetch(const char *url)
     (void)url;
     return false;
 #endif
+}
+
+extern "C" bool tdeck_net_fetch(const char *url)
+{
+    if (s_pending || s_state == NET_START || s_state == NET_CONNECTING || s_state == NET_FETCH)
+        return false;
+    s_openAIRequest = false;
+    memset(s_openAIKey, 0, sizeof(s_openAIKey));
+    if (s_postBody) {
+        free(s_postBody);
+        s_postBody = nullptr;
+    }
+    return netQueueFetch(url);
 }
 
 // 0 idle, 1 working, 2 done, 3 error.
@@ -284,7 +354,7 @@ extern "C" int tdeck_net_state(void)
 
 // Copy the body when done; returns bytes copied (0 if not done). Reading it returns the
 // door to idle so the next fetch can start. Only safe to read once NET_DONE, which the
-// service sets AFTER the body is fully written — so no torn reads.
+// service sets AFTER the body is fully written - so no torn reads.
 extern "C" int tdeck_net_result(char *buf, int cap)
 {
     if (s_state != NET_DONE || !buf || cap <= 0)
@@ -305,6 +375,10 @@ extern "C" int tdeck_net_result(char *buf, int cap)
 #endif
     s_bodyLen = 0;
     s_state = NET_IDLE;
+    if (s_ownsNetworkJob) {
+        s_ownsNetworkJob = false;
+        tdeck_network_job_release(1);
+    }
     return n;
 }
 
@@ -318,12 +392,22 @@ extern "C" void tdeck_net_reset(void)
 {
 #if HAS_WIFI
     if (s_state == NET_DONE || s_state == NET_ERROR) {
+        memset(s_openAIKey, 0, sizeof(s_openAIKey));
+        s_openAIRequest = false;
+        if (s_postBody) {
+            free(s_postBody);
+            s_postBody = nullptr;
+        }
         if (s_body) {
             heap_caps_free(s_body);
             s_body = nullptr;
         }
         s_bodyLen = 0;
         s_state = NET_IDLE;
+        if (s_ownsNetworkJob) {
+            s_ownsNetworkJob = false;
+            tdeck_network_job_release(1);
+        }
     }
 #endif
 }
@@ -344,17 +428,21 @@ static bool netHttpGet(const char *url)
     tdeck_tls_reserve_release();
     if (!s_client) {
         s_client = new WiFiClientSecure();
-        s_client->setInsecure(); // public, read-only APIs; no room for a CA bundle
-    // ⛔ 15-SECOND HANDSHAKE CAP. The library default is 120 SECONDS, and the task watchdog fires
-    // at ~90: a TLS handshake that stalls on a weak wi-fi link was rebooting the device before the
-    // library gave up. Caught 2026-09-29 - the log went silent at "net: GET api.open-meteo.com"
-    // (the lock-screen weather refresh) and the watchdog reset the device 77 seconds later.
+        if (s_openAIRequest)
+            s_client->setCACert(kOpenAIRootCA);
+        else
+            s_client->setInsecure(); // public, read-only APIs
+        // ⛔ 15-SECOND HANDSHAKE CAP. The library default is 120 SECONDS, and the task watchdog fires
+        // at ~90: a TLS handshake that stalls on a weak wi-fi link was rebooting the device before the
+        // library gave up. Caught 2026-09-29 - the log went silent at "net: GET api.open-meteo.com"
+        // (the lock-screen weather refresh) and the watchdog reset the device 77 seconds later.
         s_client->setHandshakeTimeout(15);
     }
     HTTPClient http;
     http.setConnectTimeout(6000);
     http.setTimeout(6000);
     http.setUserAgent("t-ui-tdeck"); // some APIs reject a blank/odd user-agent
+    http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
     {
         // ⛔ NEVER LOG A KEY. Gemini carries the user's API key in the query string, and this line
         // printed the whole URL to the USB log - found 2026-09-29 reading a capture. Everything
@@ -379,38 +467,42 @@ static bool netHttpGet(const char *url)
     int code;
     if (s_postBody) {
         http.addHeader("Content-Type", s_postType);
+        if (s_openAIRequest)
+            http.addHeader("Authorization", String("Bearer ") + s_openAIKey);
         http.setTimeout(20000); // Gemini takes a few seconds to think; 6s would time out mid-answer
         LOG_INFO("net: POST %d bytes", (int)strlen(s_postBody));
         code = http.POST((uint8_t *)s_postBody, strlen(s_postBody));
         free(s_postBody);
         s_postBody = nullptr;
+        memset(s_openAIKey, 0, sizeof(s_openAIKey));
     } else {
         code = http.GET();
     }
     if (code != HTTP_CODE_OK) {
         // The BODY of a failed request is worth keeping: Gemini explains a rejected key or a
         // retired model in it, and "it failed" alone would leave that unfixable from the device.
-        String err = http.getString();
-        LOG_INFO("net: request failed, code=%d body=%.120s", code, err.c_str());
+        LOG_INFO("net: request failed, code=%d", code);
         s_httpCode = code;
         http.end();
         return false;
     }
     s_httpCode = code;
     // Read the body. Open-Meteo (and many APIs) send it CHUNKED with no Content-Length header,
-    // so http.getSize() returns -1 — that's WHY the first version failed, it treated -1 as empty.
+    // so http.getSize() returns -1 - that's WHY the first version failed, it treated -1 as empty.
     // getString() reads and de-chunks the whole body cleanly; our JSON responses are small.
-    (void)http.getSize();
-    String body = http.getString();
+    char *buf = (char *)heap_caps_malloc(kNetMaxBody + 1, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        http.end();
+        return false;
+    }
+    HttpBodyBuffer body((uint8_t *)buf, kNetMaxBody);
+    int got = http.writeToStream(&body);
     http.end();
-    int got = (int)body.length();
     LOG_INFO("net: read %d bytes", got);
-    if (got <= 0 || got > kNetMaxBody)
+    if (got <= 0 || body.overflowed() || (size_t)got != body.size()) {
+        free(buf);
         return false;
-    char *buf = (char *)heap_caps_malloc(got + 1, MALLOC_CAP_SPIRAM);
-    if (!buf)
-        return false;
-    memcpy(buf, body.c_str(), (size_t)got);
+    }
     buf[got] = 0;
     if (s_body)
         heap_caps_free(s_body);
@@ -456,9 +548,9 @@ extern "C" void tdeck_net_service(void)
             const size_t before = s_tlsReserveBytes;
             tdeck_tls_reserve_init();
             if (s_tlsReserveBytes != before)
-                LOG_INFO("tls reserve: now holding %u bytes in %d/%d blocks (largest free %u)",
-                         (unsigned)s_tlsReserveBytes, (s_tlsReserve[0] ? 1 : 0) + (s_tlsReserve[1] ? 1 : 0),
-                         kTlsBlocks, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+                LOG_INFO("tls reserve: now holding %u bytes in %d/%d blocks (largest free %u)", (unsigned)s_tlsReserveBytes,
+                         (s_tlsReserve[0] ? 1 : 0) + (s_tlsReserve[1] ? 1 : 0), kTlsBlocks,
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
         }
     }
 
@@ -469,7 +561,7 @@ extern "C" void tdeck_net_service(void)
 
     switch (s_state) {
     case NET_START: {
-        // Wi-Fi and BT can't share the radio here — drop BT first, but only ONCE. Calling
+        // Wi-Fi and BT can't share the radio here - drop BT first, but only ONCE. Calling
         // deinit() over and over on an already-down stack is needless and a place double-frees
         // could hide, so latch it. BT stays down until the next reboot regardless.
         static bool s_btDown = false;
@@ -512,6 +604,12 @@ extern "C" void tdeck_net_service(void)
     }
     case NET_FETCH: {
         bool ok = netHttpGet(s_url);
+        memset(s_openAIKey, 0, sizeof(s_openAIKey));
+        s_openAIRequest = false;
+        if (s_postBody) {
+            free(s_postBody);
+            s_postBody = nullptr;
+        }
         // Only close what we opened, and not immediately: an app that fetches twice in a row
         // (Weather asks where you are, then what the weather is) would otherwise pay for a full
         // reconnect in between. Hold it briefly instead; the grace period below drops it.

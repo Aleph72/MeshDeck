@@ -12,3 +12,6 @@ dependencies:
     require: public
     rules:
       - if: "target in [esp32, esp32s2, esp32s3, esp32p4]"
+
+  espressif/mdns: "==1.13.1"
+  joltwallet/littlefs: "==1.22.3"

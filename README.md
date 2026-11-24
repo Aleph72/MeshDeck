@@ -1,4 +1,10 @@
-# T-UI — firmware source
+# T-Deck Field
+
+This experimental T-Deck Plus fork adds offline repeater lookup, an OpenAI API client, signed OTA and corrected offline map downloads. See [Field documentation](README.field.md).
+
+Original project documentation and credits follow.
+
+# T-UI - firmware source
 
 **T-UI** is an unofficial, community-made custom firmware for the **LilyGo T-Deck**: a
 phone-style launcher (apps grid, lock screen, offline maps with pins, notes, calculator,
@@ -12,12 +18,12 @@ published to comply with the GPL-3.0 license of the Meshtastic project it builds
 
 ## 📌 First things to know (after installing)
 
-- **The screen locks when it sleeps. The default unlock code is `1234`** — change it in
-  *Settings → Lock PIN*.
+- **The screen locks when it sleeps. The default unlock code is `1234`** - change it in
+  _Settings → Lock PIN_.
 - **Taps landing in the wrong spot? Press `Alt + C`** on the keyboard to re-run touch
   calibration. Works even on the lock screen.
 - **Double-click the trackball** to wake the screen and to go Home from anywhere.
-- The first start sits on the Meshtastic logo for **15–20 seconds** — normal, don't unplug.
+- The first start sits on the Meshtastic logo for **15-20 seconds** - normal, don't unplug.
 
 ## What this is based on
 
@@ -34,9 +40,9 @@ Map tiles are user data loaded onto the SD card.
 
 ## Main modifications (vs stock Meshtastic)
 
-- `lib/meshtastic-device-ui/source/graphics/TFT/TFTView_320x240.cpp` (+ header) — the
+- `lib/meshtastic-device-ui/source/graphics/TFT/TFTView_320x240.cpp` (+ header) - the
   launcher itself: home grid with pages/reorder, settings screen (mesh kill switch,
-  lock PIN, brightness, GPS on/off — on = always searching, location-sharing precision
+  lock PIN, brightness, GPS on/off - on = always searching, location-sharing precision
   [Exact/Rough/Off via Meshtastic's per-channel position precision], Wi-Fi, FTP file
   share, screen timeout, one Sound switch driving Meshtastic's `buzzer_mode` for beeps
   AND message alerts), lock/PIN wake gating, unread-message counter on the home bar +
@@ -50,8 +56,8 @@ Map tiles are user data loaded onto the SD card.
   `TDeckMemInfo.cpp` (heap/PSRAM diagnostics + reset-reason capture), `TDeckBeep.cpp`
   (volume bracket), `TDeckWifi.cpp`, `TDeckFtp.cpp` (on-demand FTP server),
   `TDeckLua.cpp` (sandboxed Lua engine for `/apps/<name>/main.lua` on SD).
-- `src/main.cpp` — deferred-service hooks for the mesh and GPS switches.
-- `src/AudioThread.h`, `platformio.ini`, `variants/esp32s3/t-deck/platformio.ini` —
+- `src/main.cpp` - deferred-service hooks for the mesh and GPS switches.
+- `src/AudioThread.h`, `platformio.ini`, `variants/esp32s3/t-deck/platformio.ini` -
   small supporting changes.
 
 ## Building
@@ -67,6 +73,6 @@ Flash the resulting `firmware-*.factory.bin` at offset `0x0` (full install) or
 
 ## License & trademarks
 
-GPL-3.0, same as Meshtastic — see `LICENSE`. T-UI is **not** created, endorsed, or
+GPL-3.0, same as Meshtastic - see `LICENSE`. T-UI is **not** created, endorsed, or
 supported by the Meshtastic project or LilyGo. "Meshtastic" is a registered trademark
 of the Meshtastic project, used here descriptively. Use at your own risk.

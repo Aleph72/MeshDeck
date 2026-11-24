@@ -991,7 +991,7 @@ void setup()
             // T-Deck launcher: create the GPS driver even when the saved config says
             // NOT_PRESENT (stock default for the GPS-less base T-Deck; ours has GPS).
             // While NOT_PRESENT the driver skips its probe and sleeps, but it has to
-            // exist for the Settings GPS switch to turn it on live — otherwise the
+            // exist for the Settings GPS switch to turn it on live - otherwise the
             // switch has nothing to talk to until a reboot, and silently does nothing.
             {
                 gps = GPS::createGps();
@@ -1281,13 +1281,13 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 
 #ifndef PIO_UNIT_TESTING
 // T-Deck launcher mesh kill-switch: apply any pending on/off request from the UI task on
-// this (main) thread — the safe radio context. Defined in src/TDeckMeshSwitch.cpp.
+// this (main) thread - the safe radio context. Defined in src/TDeckMeshSwitch.cpp.
 extern "C" void tdeck_mesh_switch_service(void);
 // T-Deck launcher GPS on/off: apply any pending request from the UI task on this (main)
-// thread — the safe GPS context. Defined in src/TDeckGpsControl.cpp.
+// thread - the safe GPS context. Defined in src/TDeckGpsControl.cpp.
 extern "C" void tdeck_gps_control_service(void);
 // Applies a favourite toggle requested by the Nodes/Favorites apps. It runs HERE, on the firmware
-// thread, because set_favorite() re-sorts the node database and writes it to flash — work that
+// thread, because set_favorite() re-sorts the node database and writes it to flash - work that
 // froze the device when the LVGL task did it directly. See src/TDeckNodesBridge.cpp.
 extern "C" void tdeck_nodes_service(void);
 extern "C" void tdeck_nodes_dump(void); // one-shot diagnostic, 45 s after boot
@@ -1295,16 +1295,24 @@ extern "C" void tdeck_nodes_dump(void); // one-shot diagnostic, 45 s after boot
 // (main) thread. Defined in src/TDeckBeep.cpp.
 extern "C" void tdeck_sound_service(void);
 #include <esp_heap_caps.h>
-extern "C" void tdeck_pop_service(void); // TDeckPop.cpp - starts the new-message pop off-thread
-extern "C" void tdeck_shot_service(void); // TDeckScreenshot.cpp - writes a pending screenshot
+extern "C" void tdeck_pop_service(void);            // TDeckPop.cpp - starts the new-message pop off-thread
+extern "C" void tdeck_shot_service(void);           // TDeckScreenshot.cpp - writes a pending screenshot
 extern "C" void tdeck_share_location_service(void); // TDeckShareLocation.cpp - one-shot position send
-extern "C" void tdeck_wx_auto_service(void); // TDeckWeatherAuto.cpp - lock-screen forecast,
-                                             // only ever when Wi-Fi is ALREADY up
+extern "C" void tdeck_wx_auto_service(void);        // TDeckWeatherAuto.cpp - lock-screen forecast,
+                                                    // only ever when Wi-Fi is ALREADY up
 // T-Deck launcher 12/24-hour switch: apply + persist a pending clock-format change from this
 // (main) thread, for the same reason as the others. Defined in src/TDeckClockFormat.cpp.
 extern "C" void tdeck_clock_service(void);
 extern "C" void tdeck_units_service(void); // F/C, src/TDeckUnits.cpp
-namespace tdeckgemini { void service(); }   // src/TDeckGemini.cpp
+namespace tdeckgemini
+{
+void service();
+} // namespace tdeckgemini
+namespace tdeckchatgpt
+{
+void service();
+}
+extern "C" void tdeck_ota_service(void);
 extern "C" void tdeck_alarm_service(void); // wake-up alarm, src/TDeckAlarm.cpp
 // T-Deck launcher "internet door" for Lua apps: runs an app's Wi-Fi fetch (BT teardown, join,
 // HTTP) as a non-blocking state machine on this safe thread. Defined in src/TDeckNet.cpp.
@@ -1353,7 +1361,8 @@ static void netDoorSelfTest()
             const int n = tdeck_net_result(buf, sizeof(buf));
             LOG_INFO("selftest: fetch 1 (location) took %u ms, %d bytes: %s", (unsigned)(millis() - t0), n, buf);
             t0 = millis();
-            if (!tdeck_net_fetch("https://api.open-meteo.com/v1/forecast?latitude=47.6&longitude=-122.3&current=temperature_2m")) {
+            if (!tdeck_net_fetch(
+                    "https://api.open-meteo.com/v1/forecast?latitude=47.6&longitude=-122.3&current=temperature_2m")) {
                 LOG_INFO("selftest: fetch 2 refused");
                 step = -1;
                 return;
@@ -1402,10 +1411,10 @@ extern "C" void tdeck_stallwatch_start(void); // TDeckMemInfo.cpp - names whiche
 // weeks. Each service call below now leaves its name here first; the watcher prints it.
 // Lesson from the connstatus freeze: make the label as fine as the question.
 extern "C" volatile const char *tdeck_loop_where;
-#define TDECK_LOOP_STEP(name, call)                                                                                    \
-    do {                                                                                                               \
-        tdeck_loop_where = name;                                                                                       \
-        call;                                                                                                          \
+#define TDECK_LOOP_STEP(name, call)                                                                                              \
+    do {                                                                                                                         \
+        tdeck_loop_where = name;                                                                                                 \
+        call;                                                                                                                    \
     } while (0);
 
 void loop()
@@ -1426,6 +1435,8 @@ void loop()
     TDECK_LOOP_STEP("clock", tdeck_clock_service())
     TDECK_LOOP_STEP("units", tdeck_units_service())
     TDECK_LOOP_STEP("gemini", tdeckgemini::service())
+    TDECK_LOOP_STEP("openai", tdeckchatgpt::service())
+    TDECK_LOOP_STEP("field_ota", tdeck_ota_service())
     TDECK_LOOP_STEP("alarm", tdeck_alarm_service())
     TDECK_LOOP_STEP("net", tdeck_net_service())
     TDECK_LOOP_STEP("mail", tdeck_mail_service())

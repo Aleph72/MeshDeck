@@ -85,3 +85,7 @@ platformio_local*.ini
 *.patch
 src/chess/*.exe
 src/chess/probe.c
+
+# Project-local Field toolchains and private signing material
+.field-build/
+.field-signing-keys/

@@ -31,22 +31,24 @@
 //   @@open <screen>   - lock|settings|chats|nodes|alerts|notes|glance
 //   @@shot            - take a screenshot to internal flash
 //   @@get             - stream the last capture back (RLE+base64, ~2s)
+//   @@mapbox N S W E Z - prepare a TopPlusOpen area (maximum 10000 tiles)
+//   @@mapstatus       - download counters only
 //
 // THREADING: the bytes arrive on whichever task runs the serial API, so this file only
 // ever parses and queues. Everything that touches LVGL is executed by the UI poll timer
 // on the "tft" task - see tdeck_remote_take(). That is the same rule as the rest of the
 // launcher bridges; see the notes in TDeckPop.cpp.
 // -----------------------------------------------------------------------------
-#include "configuration.h"
-#include "TDeckMail.h"   // @@mail / @@inbox
-#include "TDeckGemini.h" // @@gem - ask it headlessly, no unlock needed
 #include "TDeckCoverage.h" // @@cov
-#include "graphics/common/SdCard.h" // @@mailfile reads /gmail.txt
-#include <lvgl.h> // @@refr needs the refresh timer
+#include "TDeckGemini.h"   // @@gem - ask it headlessly, no unlock needed
+#include "TDeckMail.h"     // @@mail / @@inbox
+#include "configuration.h"
+#include "graphics/common/SdCard.h"     // @@mailfile reads /gmail.txt
+#include <lvgl.h>                       // @@refr needs the refresh timer
 extern "C" void tdeck_fps_set(bool on); // @@fps - LGFXDriver.h
-#include "chess/chess.h"  // @@chess - benchmark the engine on the real chip
+#include "TDeckChess.h"                 // tdeck_chess_engine_busy - @@chess must not collide with a game in progress
+#include "chess/chess.h"                // @@chess - benchmark the engine on the real chip
 #include "chess/search.h"
-#include "TDeckChess.h" // tdeck_chess_engine_busy - @@chess must not collide with a game in progress
 #include <Arduino.h>
 #include <cstdio>
 #include <cstring>
@@ -71,7 +73,7 @@ static bool s_armed = false; // saw '@' '@' at the start of a line
 static volatile int s_cmd = 0; // 0 none, 1 tap, 2 home, 3 back, 4 shot, 5 info, 6 ping
 static volatile int s_x = 0, s_y = 0;
 static volatile int s_x2 = 0, s_y2 = 0; // swipe end point
-static char s_arg[48];                   // text argument (@@place <query>), copied before queuing
+static char s_arg[48];                  // text argument (@@place <query>), copied before queuing
 
 extern "C" void tdeck_shot_stream_begin(void); // src/TDeckScreenshot.cpp
 
@@ -101,7 +103,8 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 // The freeze watcher (TDeckMemInfo.cpp). Reported so its being alive is a
                 // fact rather than an assumption - a watchdog nobody checks is worse than none.
                 TaskHandle_t swT = xTaskGetHandle("stallwatch");
-                LOG_INFO("@@ok mem internal free=%u largest=%u min=%u | psram free=%u largest=%u | stack tft=%u loop=%u sw=%u | pktq=%u peak=%u cap=%u itemsz=%u",
+                LOG_INFO("@@ok mem internal free=%u largest=%u min=%u | psram free=%u largest=%u | stack tft=%u loop=%u sw=%u | "
+                         "pktq=%u peak=%u cap=%u itemsz=%u",
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
@@ -163,9 +166,8 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                     char mbuf[8] = "----";
                     if (ok)
                         chess_move_str(&mv, mbuf);
-                    LOG_INFO("@@ok chess depth=%d nodes=%u ms=%u knps=%u best=%s score=%d tt=%lu", in.depth,
-                             (unsigned)in.nodes, (unsigned)took, (unsigned)(took ? in.nodes / took : 0), mbuf,
-                             in.score, search_table_entries());
+                    LOG_INFO("@@ok chess depth=%d nodes=%u ms=%u knps=%u best=%s score=%d tt=%lu", in.depth, (unsigned)in.nodes,
+                             (unsigned)took, (unsigned)(took ? in.nodes / took : 0), mbuf, in.score, search_table_entries());
                     search_release();
                 }
             } else if (!strncmp(s_line, "cov", 3)) {
@@ -196,10 +198,44 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                     int32_t la = 0, lo = 0;
                     int q = 0, rs = 0, n = 0;
                     bool any = tdeck_coverage_cell(0, &la, &lo, &q, &rs, &n);
-                    LOG_INFO("@@ok cov rec=%d cells=%d first=%ld,%ld snr=%.2f rssi=%d n=%d",
-                             (int)tdeck_coverage_enabled(), tdeck_coverage_count(), (long)(any ? la : 0),
-                             (long)(any ? lo : 0), any ? q / 4.0f : 0.0f, any ? rs : 0, any ? n : 0);
+                    LOG_INFO("@@ok cov rec=%d cells=%d first=%ld,%ld snr=%.2f rssi=%d n=%d", (int)tdeck_coverage_enabled(),
+                             tdeck_coverage_count(), (long)(any ? la : 0), (long)(any ? lo : 0), any ? q / 4.0f : 0.0f,
+                             any ? rs : 0, any ? n : 0);
                 }
+            } else if (!strncmp(s_line, "mapbox ", 7)) {
+                // Prepare a bounded offline area; downloading still requires Start.
+                strncpy(s_arg, s_line + 7, sizeof(s_arg) - 1);
+                s_arg[sizeof(s_arg) - 1] = 0;
+                s_cmd = 17;
+            } else if (!strcmp(s_line, "mapstatus")) {
+                s_cmd = 18;
+            } else if (!strncmp(s_line, "tune ", 5)) {
+                int zone, volume;
+                if (sscanf(s_line + 5, "%d %d", &zone, &volume) == 2 && zone >= 0 && zone <= 9 && volume >= 0 && volume <= 100) {
+                    s_x = zone;
+                    s_y = volume;
+                    s_cmd = 19;
+                }
+            } else if (!strcmp(s_line, "localstatus")) {
+                s_cmd = 20;
+            } else if (!strcmp(s_line, "soundtest")) {
+                s_cmd = 21;
+            } else if (!strcmp(s_line, "otastatus")) {
+                s_cmd = 23;
+            } else if (!strcmp(s_line, "otacheck")) {
+                s_cmd = 24;
+            } else if (!strcmp(s_line, "otatest")) {
+                s_cmd = 25;
+            } else if (!strcmp(s_line, "rptstatus")) {
+                s_cmd = 22;
+            } else if (!strcmp(s_line, "rptupdate")) {
+                s_cmd = 26;
+            } else if (!strcmp(s_line, "rptref")) {
+                s_cmd = 27;
+            } else if (!strcmp(s_line, "openaihealth")) {
+                s_cmd = 28;
+            } else if (!strcmp(s_line, "openaistatus")) {
+                s_cmd = 29;
             } else if (!strncmp(s_line, "place", 5)) {
                 // @@place <words> - search the offline place names from the map's centre and
                 // report timing plus the first few hits. Place names are public data; this never
@@ -225,8 +261,8 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 if (*a)
                     tdeckgemini::ask(a);
                 const char *r = tdeckgemini::reply();
-                LOG_INFO("@@ok gem state=%d status=\"%s\" reply=\"%.70s\"", tdeckgemini::state(),
-                         tdeckgemini::statusText(), r ? r : "");
+                LOG_INFO("@@ok gem state=%d status=\"%s\" reply=\"%.70s\"", tdeckgemini::state(), tdeckgemini::statusText(),
+                         r ? r : "");
             } else if (!strncmp(s_line, "mailsend", 8)) {
                 if (tdeck_mail_send_selftest())
                     LOG_INFO("@@ok mailsend queued (to the signed-in address only)");
@@ -292,23 +328,39 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 int which = -1;
                 // ⚠️ "lockpad" BEFORE "lock", or the shorter prefix swallows it - which it
                 // did, and the sweep captured Lock settings twice instead of the keypad.
-                if (!strncmp(a, "lockpad", 7))       which = 12; // the PIN keypad itself
-                else if (!strncmp(a, "lock", 4))     which = 1;  // Settings > Lock screen
-                else if (!strncmp(a, "settings", 8)) which = 2;
-                else if (!strncmp(a, "chats", 5))    which = 3;
-                else if (!strncmp(a, "nodes", 5))    which = 4;
-                else if (!strncmp(a, "alerts", 6))   which = 5;
-                else if (!strncmp(a, "notes", 5))    which = 6;
-                else if (!strncmp(a, "glance", 6))   which = 7;
-                else if (!strncmp(a, "favorites", 9)) which = 8;
-                else if (!strncmp(a, "maps", 4))     which = 9;
-                else if (!strncmp(a, "pins", 4))     which = 10; // the pins list, i.e. the search
-                else if (!strncmp(a, "getapps", 7))  which = 11;
+                if (!strncmp(a, "lockpad", 7))
+                    which = 12; // the PIN keypad itself
+                else if (!strncmp(a, "lock", 4))
+                    which = 1; // Settings > Lock screen
+                else if (!strncmp(a, "settings", 8))
+                    which = 2;
+                else if (!strncmp(a, "chats", 5))
+                    which = 3;
+                else if (!strncmp(a, "nodes", 5))
+                    which = 4;
+                else if (!strncmp(a, "alerts", 6))
+                    which = 5;
+                else if (!strncmp(a, "notes", 5))
+                    which = 6;
+                else if (!strncmp(a, "glance", 6))
+                    which = 7;
+                else if (!strncmp(a, "favorites", 9))
+                    which = 8;
+                else if (!strncmp(a, "maps", 4))
+                    which = 9;
+                else if (!strncmp(a, "pins", 4))
+                    which = 10; // the pins list, i.e. the search
+                else if (!strncmp(a, "getapps", 7))
+                    which = 11;
                 // ⭐ Added after losing a lot of time to blind taps: reaching an app by
                 // tapping a tile depends on which launcher PAGE happens to be showing, and
                 // @@tap can register as a long press and open "Arrange apps" instead.
-                else if (!strncmp(a, "chess", 5))    which = 13;
-                else if (!strncmp(a, "mail", 4))     which = 14;
+                else if (!strncmp(a, "chatgpt", 7))
+                    which = 15;
+                else if (!strncmp(a, "repeaters", 9))
+                    which = 16;
+                else if (!strncmp(a, "updates", 7))
+                    which = 17;
                 if (which > 0) {
                     s_x = which;
                     s_cmd = 9;
@@ -342,7 +394,10 @@ extern "C" void tdeck_remote_feed(uint8_t c)
             } else if (!strncmp(s_line, "swipe", 5)) {
                 int x1 = -1, y1 = -1, x2 = -1, y2 = -1;
                 if (sscanf(s_line + 5, "%d %d %d %d", &x1, &y1, &x2, &y2) == 4) {
-                    s_x = x1; s_y = y1; s_x2 = x2; s_y2 = y2;
+                    s_x = x1;
+                    s_y = y1;
+                    s_x2 = x2;
+                    s_y2 = y2;
                     s_cmd = 7;
                 } else {
                     LOG_INFO("@@err swipe needs x1 y1 x2 y2");

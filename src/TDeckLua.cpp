@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// TDeckLua — the T-Deck Lua app engine (firmware side).
+// TDeckLua - the T-Deck Lua app engine (firmware side).
 //
 // Split so neither side has to include the other's headers:
 //   • Firmware side (here): owns the lua_State, opens ONLY safe libraries, and
@@ -17,9 +17,9 @@
 #include <math.h>
 
 extern "C" {
+#include "lauxlib.h"
 #include "lua.h"
 #include "lualib.h"
-#include "lauxlib.h"
 }
 
 // --- bridges into the device-ui side (drawing + the app-folder file store) -----
@@ -33,7 +33,7 @@ extern "C" bool tdeck_appfs_write(const char *name, const char *data, int len);
 // several; LVGL only ever consumes one). Returns the count, or -1 if no reader is
 // wired up (pre-16.4 device-ui). Lets games use both halves of the screen at once.
 extern "C" int tdeck_touch_read(unsigned short *xs, unsigned short *ys, int max);
-// GPS position for apps (src/TDeckGpsBridge.cpp). Read-only, cheap, safe to call anytime —
+// GPS position for apps (src/TDeckGpsBridge.cpp). Read-only, cheap, safe to call anytime -
 // the first of the "wider toolbox" doors. Returns false until there's a usable fix.
 extern "C" bool tdeck_gps_position(int32_t *lat, int32_t *lon);
 extern "C" uint32_t tdeck_gps_num_sats(void);
@@ -49,8 +49,9 @@ extern "C" int tdeck_net_poll(void);
 extern "C" int tdeck_net_result(char *buf, int cap);
 extern "C" void tdeck_net_reset(void);
 // --- other firmware helpers ---------------------------------------------------
-void playBeep();                              // buzz.cpp (C++ linkage)
-extern "C" void tdeck_beep_gain(float gain);  // TDeckBeep.cpp — temporarily boost buzzer volume
+void playBeep();                             // buzz.cpp (C++ linkage)
+extern "C" void tdeck_beep_gain(float gain); // TDeckBeep.cpp - temporarily boost buzzer volume
+extern "C" void tdeck_beep_restore_gain(void);
 
 extern "C" void tdeck_lua_app_stop(void); // defined below; used by tdeck_lua_app_start
 
@@ -60,7 +61,7 @@ static lua_State *AppL = nullptr;
 static bool s_appKeepsBack = false;
 
 // Route ALL Lua allocations to PSRAM (the big 8MB pool) so apps never starve the
-// scarce internal RAM the mesh stack lives in — this is how the engine scales.
+// scarce internal RAM the mesh stack lives in - this is how the engine scales.
 static void *lua_psram_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
 {
     (void)ud;
@@ -146,7 +147,7 @@ static int api_store_write(lua_State *L)
     return 1;
 }
 
-// screen.line(id, x1, y1, x2, y2, thickness, color) — an angled thick bar.
+// screen.line(id, x1, y1, x2, y2, thickness, color) - an angled thick bar.
 // ---- canvas: pixel drawing for games ----------------------------------------
 // The screen.* API above is capped at 80 UI objects. The canvas is one object holding
 // a whole frame buffer, so an app can draw as much as it likes. Every call here lands
@@ -173,34 +174,30 @@ static int api_canvas_clear(lua_State *L)
 
 static int api_canvas_rect(lua_State *L)
 {
-    tdeck_ui_canvas_rect(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3),
-                         pixArg(L, 4), colArg(L, 5, 0xFFFFFF));
+    tdeck_ui_canvas_rect(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3), pixArg(L, 4), colArg(L, 5, 0xFFFFFF));
     return 0;
 }
 
 static int api_canvas_pixel(lua_State *L)
 {
-    tdeck_ui_canvas_pixel(pixArg(L, 1), pixArg(L, 2),
-                          colArg(L, 3, 0xFFFFFF));
+    tdeck_ui_canvas_pixel(pixArg(L, 1), pixArg(L, 2), colArg(L, 3, 0xFFFFFF));
     return 0;
 }
 
 static int api_canvas_line(lua_State *L)
 {
-    tdeck_ui_canvas_line(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3),
-                         pixArg(L, 4), colArg(L, 5, 0xFFFFFF));
+    tdeck_ui_canvas_line(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3), pixArg(L, 4), colArg(L, 5, 0xFFFFFF));
     return 0;
 }
 
 static int api_canvas_circle(lua_State *L)
 {
-    tdeck_ui_canvas_circle(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3),
-                           colArg(L, 4, 0xFFFFFF), lua_toboolean(L, 5));
+    tdeck_ui_canvas_circle(pixArg(L, 1), pixArg(L, 2), pixArg(L, 3), colArg(L, 4, 0xFFFFFF), lua_toboolean(L, 5));
     return 0;
 }
 
-extern "C" void tdeck_ui_canvas_sprite(int x, int y, int w, int h, const char *pix, const uint32_t *lut,
-                                       const uint8_t *opaque, int scale);
+extern "C" void tdeck_ui_canvas_sprite(int x, int y, int w, int h, const char *pix, const uint32_t *lut, const uint8_t *opaque,
+                                       int scale);
 
 // canvas.sprite(x, y, width, pixels, palette, scale)
 //
@@ -281,7 +278,7 @@ static int api_device_beep(lua_State *L)
     if (lua_toboolean(L, 1)) {
         tdeck_beep_gain(1.0f);
         playBeep();
-        tdeck_beep_gain(0.2f);
+        tdeck_beep_restore_gain();
     } else {
         playBeep();
     }
@@ -294,7 +291,7 @@ static int api_device_time(lua_State *L)
     return 1;
 }
 
-// device.touches() -> n, x1, y1, x2, y2 — every finger on the screen right now (up
+// device.touches() -> n, x1, y1, x2, y2 - every finger on the screen right now (up
 // to 2). n is 0 when nothing is touching. Poll it from on_tick for true multi-touch
 // (e.g. pinball holding both flippers); on_touch/on_drag stay single-point.
 static int api_device_touches(lua_State *L)
@@ -311,13 +308,13 @@ static int api_device_touches(lua_State *L)
     return 1 + 2 * n;
 }
 
-// device.gps() -> lat, lon, sats  — location as plain decimal degrees (e.g. 47.61, -122.33)
+// device.gps() -> lat, lon, sats  - location as plain decimal degrees (e.g. 47.61, -122.33)
 // plus the satellite count. Until there's a fix, lat and lon come back nil but sats still
 // updates, so an app can show the search progressing rather than a dead screen:
 //   local lat, lon, sats = device.gps()
 //   if lat then ... have a position ... else ... still searching, watch sats climb ... end
 // Read-only: it can't move the device or drain anything, which is why it's a safe door to open.
-// device.clock() -> year, month, day, hour, min, sec, utc_offset  — the local date and time,
+// device.clock() -> year, month, day, hour, min, sec, utc_offset  - the local date and time,
 // with the timezone offset in seconds (daylight saving already applied). All nil until the
 // device has heard the time from the GPS satellites, so an app can say "waiting for a fix"
 // rather than printing a wrong answer confidently:
@@ -357,12 +354,12 @@ static int api_device_gps(lua_State *L)
 }
 
 // ---- net.* : fetch data from the internet over Wi-Fi, without freezing the app ----
-// Usage in an app (never blocks — poll from on_tick):
+// Usage in an app (never blocks - poll from on_tick):
 //   net.fetch("https://api.open-meteo.com/...")   -- start; returns true if it began
 //   local s = net.status()                        -- "idle"/"working"/"done"/"error"
 //   if s == "done" then local text = net.body() ... end   -- body() also clears it
 // Wi-Fi has to be set up in Settings first; net.fetch returns false if it isn't. Bringing
-// Wi-Fi up drops Bluetooth until the next reboot (the radio can't do both) — see TDeckNet.cpp.
+// Wi-Fi up drops Bluetooth until the next reboot (the radio can't do both) - see TDeckNet.cpp.
 static int api_net_fetch(lua_State *L)
 {
     const char *url = luaL_checkstring(L, 1);
@@ -432,7 +429,7 @@ extern "C" int tdeck_lua_app_start(const char *script)
     if (!AppL)
         return -1;
 
-    // open ONLY the safe libraries — no io/os/package. That omission is the fence.
+    // open ONLY the safe libraries - no io/os/package. That omission is the fence.
     luaL_requiref(AppL, LUA_GNAME, luaopen_base, 1);
     lua_pop(AppL, 1);
     luaL_requiref(AppL, LUA_STRLIBNAME, luaopen_string, 1);
@@ -447,23 +444,18 @@ extern "C" int tdeck_lua_app_start(const char *script)
                                          {"line", api_screen_line},
                                          {"hide", api_screen_hide},
                                          {nullptr, nullptr}};
-    static const luaL_Reg deviceLib[] = {{"beep", api_device_beep},
-                                         {"time", api_device_time},
-                                         {"touches", api_device_touches},
-                                         {"gps", api_device_gps},
-                                         {"clock", api_device_clock},
-                                         {nullptr, nullptr}};
+    static const luaL_Reg deviceLib[] = {{"beep", api_device_beep}, {"time", api_device_time},   {"touches", api_device_touches},
+                                         {"gps", api_device_gps},   {"clock", api_device_clock}, {nullptr, nullptr}};
     static const luaL_Reg storeLib[] = {{"read", api_store_read}, {"write", api_store_write}, {nullptr, nullptr}};
     static const luaL_Reg netLib[] = {{"fetch", api_net_fetch},
                                       {"status", api_net_status},
                                       {"body", api_net_body},
                                       {"reset", api_net_reset},
                                       {nullptr, nullptr}};
-    static const luaL_Reg canvasLib[] = {{"begin", api_canvas_begin}, {"clear", api_canvas_clear},
-                                         {"rect", api_canvas_rect},   {"pixel", api_canvas_pixel},
-                                         {"line", api_canvas_line},   {"circle", api_canvas_circle},
-                                         {"sprite", api_canvas_sprite},
-                                         {"flip", api_canvas_flip},   {nullptr, nullptr}};
+    static const luaL_Reg canvasLib[] = {
+        {"begin", api_canvas_begin},   {"clear", api_canvas_clear}, {"rect", api_canvas_rect},
+        {"pixel", api_canvas_pixel},   {"line", api_canvas_line},   {"circle", api_canvas_circle},
+        {"sprite", api_canvas_sprite}, {"flip", api_canvas_flip},   {nullptr, nullptr}};
     luaL_newlib(AppL, screenLib);
     lua_setglobal(AppL, "screen");
     luaL_newlib(AppL, deviceLib);
@@ -527,7 +519,7 @@ extern "C" void tdeck_lua_app_touch(int x, int y)
 }
 
 // Continuous finger position while dragging (fires many times per press). Apps
-// opt in by defining on_drag(x, y) — used e.g. by Breakout to steer the paddle.
+// opt in by defining on_drag(x, y) - used e.g. by Breakout to steer the paddle.
 extern "C" void tdeck_lua_app_drag(int x, int y)
 {
     if (!AppL)
@@ -546,7 +538,7 @@ extern "C" void tdeck_lua_app_drag(int x, int y)
 // A key from the physical keyboard. Apps opt in by defining on_key(k).
 //
 // Printable characters arrive as themselves ("a", "7", " "). The keys that aren't
-// characters arrive as names — "left", "right", "up", "down", "enter", "back", "esc" —
+// characters arrive as names - "left", "right", "up", "down", "enter", "back", "esc" -
 // so an app can read `if k == "left"` instead of memorising control codes.
 extern "C" void tdeck_lua_app_key(uint32_t key)
 {
@@ -561,15 +553,31 @@ extern "C" void tdeck_lua_app_key(uint32_t key)
     char one[2] = {0, 0};
     const char *name = nullptr;
     switch (key) {
-    case 17: name = "up"; break;
-    case 18: name = "down"; break;
-    case 19: name = "right"; break;
-    case 20: name = "left"; break;
-    case 27: name = "esc"; break;
-    case 8:  name = "back"; break;  // backspace
-    case 127: name = "back"; break; // delete — same intent to a player
+    case 17:
+        name = "up";
+        break;
+    case 18:
+        name = "down";
+        break;
+    case 19:
+        name = "right";
+        break;
+    case 20:
+        name = "left";
+        break;
+    case 27:
+        name = "esc";
+        break;
+    case 8:
+        name = "back";
+        break; // backspace
+    case 127:
+        name = "back";
+        break; // delete - same intent to a player
     case 10:
-    case 13: name = "enter"; break;
+    case 13:
+        name = "enter";
+        break;
     default:
         if (key >= 32 && key < 127) {
             one[0] = (char)key;

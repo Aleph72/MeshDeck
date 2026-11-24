@@ -21,8 +21,8 @@
 // With no fix and no RTC there is no valid time, and an alarm that does not know what time it
 // is must stay silent rather than guess.
 // -----------------------------------------------------------------------------
-#include "main.h"
 #include "gps/RTC.h" // getValidTime + RTCQuality
+#include "main.h"
 #include "mesh/NodeDB.h"
 #include <Preferences.h>
 #include <time.h>
@@ -35,6 +35,7 @@ extern volatile bool tdeck_wake_request;
 // uses, so the alarm sounds like the rest of the device.
 void playLongBeep();
 extern "C" void tdeck_beep_gain(float g);
+extern "C" void tdeck_beep_restore_gain(void);
 
 static int s_hour = 7;
 static int s_min = 0;
@@ -115,7 +116,7 @@ extern "C" void tdeck_alarm_dismiss(void)
     if (!s_ringing)
         return;
     s_ringing = false;
-    tdeck_beep_gain(0.2f); // put the loudness back where the rest of the device expects it
+    tdeck_beep_restore_gain(); // put the loudness back where the rest of the device expects it
     LOG_INFO("[ALARM] dismissed");
 }
 
