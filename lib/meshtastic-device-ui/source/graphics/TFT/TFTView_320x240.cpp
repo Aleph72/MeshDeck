@@ -1,6 +1,7 @@
+#include "util/ChatGPTPlan.h"
+extern "C" void tdeck_remote_clear_arg(void);
 #if HAS_TFT && defined(VIEW_320x240) || defined(VIEW_240x320)
 
-#include "graphics/view/TFT/TFTView_320x240.h"
 #include "Arduino.h"
 #include "graphics/common/BatteryLevel.h"
 #include "graphics/common/LoRaPresets.h"
@@ -12,6 +13,7 @@
 #include "graphics/map/TileProvider.h"
 #include "graphics/map/URLService.h"
 #include "graphics/view/TFT/LockWidgets.h" // the three lock-screen widgets
+#include "graphics/view/TFT/TFTView_320x240.h"
 #include "graphics/view/TFT/Themes.h"
 #include "graphics/view/TFT/TuiLabel.h"     // tui_one_line: LONG_DOT needs a height
 #include "graphics/view/TFT/TuiStatusBar.h" // the persistent top bar (note item A4)
@@ -11331,6 +11333,30 @@ void TFTView_320x240::remoteService(void)
     case 27:
         tdeck_repeaters_use_zaragoza();
         tdeck_remote_reply("rptref Zaragoza manual");
+        break;
+    case 30:
+        tdeck_remote_reply(tdeckchatgpt::importBegin() ? "oauth begin ok" : "oauth begin refused");
+        break;
+    case 31: {
+        bool ok = tdeckchatgpt::importChunk(tdeck_remote_arg());
+        tdeck_remote_clear_arg();
+        tdeck_remote_reply(ok ? "oauth chunk ok" : "oauth chunk refused");
+        break;
+    }
+    case 32: {
+        bool ok = tdeckchatgpt::importEnd(tdeck_remote_arg());
+        tdeck_remote_clear_arg();
+        tdeck_remote_reply(ok ? "oauth committing" : "oauth commit refused");
+        break;
+    }
+    case 33:
+        snprintf(buf, sizeof(buf), "oauth connected=%d import=%d host=%s", (int)tdeckchatgpt::haveConfig(),
+                 tdeckchatgpt::importState(), tdeckchatgpt::hostId());
+        tdeck_remote_reply(buf);
+        break;
+    case 34:
+        tdeckchatgpt::importCancel();
+        tdeck_remote_reply("oauth cancelled");
         break;
     case 28:
         tdeck_remote_reply(tdeckchatgpt::probe() ? "openaihealth queued (no real key)" : "openaihealth busy");

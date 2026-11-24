@@ -7,9 +7,30 @@ Experimental T-UI fork for the **LilyGO T-Deck Plus, ESP32-S3, 16 MB flash**, ba
 - A smaller launcher: Mesh, Maps, Calculator, ChatGPT, Ripetitori, Settings and Updates. Games, Mail and other optional tiles are removed. Automatic discovery of SD apps is disabled unless `TDECK_FIELD_ALLOW_USER_APPS` is defined; this does not erase their files.
 - Map downloads correctly handle chunked HTTP responses. Tiles are saved on the SD card for offline use.
 - HearHam repeater directory: automatic download when the app opens with Wi-Fi already connected, manual refresh, offline cache, and the nearest 40 entries sorted by GPS distance. Without a fix, the app says so; Zaragoza can be selected explicitly as a reference. The app sends no GPS coordinates to HearHam. Meshtastic location-sharing settings are separate.
-- An unofficial OpenAI API client, with a masked key-entry screen, configurable model, bounded responses and the previous exchange kept only in RAM. It requires Internet and a personal API key; it does not run ChatGPT locally. `store:false` is requested. Real authenticated completions have not yet been tested in this development session.
+- An unofficial ChatGPT client using the official Sign in with ChatGPT flow. Eligible users authorize ChatGPT plan usage in a browser on their Mac once, then the T-Deck uses Wi-Fi directly and renews its session. No API key is needed for this mode, and failures never fall back to API-key billing. This does not expose existing ChatGPT conversations. Only the previous exchange is kept in RAM.
 - Adjustable notification volume, initially 80%, restored correctly after alarm sounds. The existing master Sound switch still applies.
 - Signed OTA updates, checked manually or once per day while Wi-Fi is connected and the launcher/lock screen is idle. Automatic checks can be disabled. A newer compatible image is downloaded, checked and installed before a restart.
+
+## Connect a ChatGPT account
+
+This is an independent open-source app using [official ChatGPT plan authorization](https://developers.openai.com/siwc/token-sharing-open-source). Availability and usage limits depend on the user's account, workspace and OpenAI policy. Connecting identity alone is insufficient: the user must authorize `chatgpt.tokens.use.direct`.
+
+1. Install the application firmware on the T-Deck Plus. Keep the USB cable connected to the Mac for the initial sign-in.
+2. Create an isolated Python 3.10+ environment and install `requirements-siwc.txt`.
+3. Run `python bin/connect-chatgpt.py --port /dev/cu.usbmodem2201 --state-dir /private/path/tdeck-field`. Choose a directory outside the repository, preferably on your external SSD.
+4. Open the printed authorization URL in a browser **on that Mac**. The callback listens only on `127.0.0.1`; opening it on a phone will not return to the Mac.
+5. Authorize the app's ChatGPT plan usage. The helper verifies state, PKCE, the signed ID token, issuer, audience, expiry, nonce and granted scopes. It reads the account's current model catalog and selects its first visible model.
+6. The helper transfers the session over USB in bounded chunks with a SHA-256 integrity check. The firmware validates its device host ID, persists it and confirms the import. After this, inference and token renewal work over the T-Deck's Wi-Fi; the Mac is not an inference proxy.
+
+The helper keeps account/client registrations separate with `--profile NAME` or `--new-account`. Registration metadata has owner-only permissions. An interrupted transfer leaves a protected `pending-session.json`; retry with `--resume` for the same profile. Successful transfer removes that pending credential file. Never put the state directory in Git, a shared folder or the SD map directory.
+
+Device credentials are in application NVS, outside exported Meshtastic configuration and outside the SD card. This does not add flash encryption or resistance to physical extraction; treat full flash backups as secrets. Session refreshes replace the access token, expiry, scopes and rotating refresh token together. After a long period without renewal, a new browser sign-in may be needed. Sign out attempts remote revocation and reports when only local disconnection is confirmed.
+
+The account UI displays the connected account, selected model and a link to ChatGPT usage settings. Plus allowances remain subject to shared plan and app limits. Existing legacy API keys are not read by this client and are never used as a fallback.
+
+Responses use `store:false`, `stream:true` and explicit conversation input. Output is bounded and UTF-8 safe; the app waits for `response.completed`, distinguishes interrupted and failed responses, and surfaces plan-usage errors. It does not send unsupported token-budget fields or use private ChatGPT backend endpoints.
+
+Host checks: `python qa/field/test-connect-chatgpt.py` tests the callback with local simulated authorization, including bad state, PKCE, signatures, nonce, expiry, private files and USB transfer integrity. The C++ plan parser is exercised by `bin/test-field-host.py` with sanitizers. Real account authorization and device inference must also be tested before treating the integration as validated.
 
 ## OTA trust and recovery
 

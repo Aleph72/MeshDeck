@@ -73,7 +73,7 @@ static bool s_armed = false; // saw '@' '@' at the start of a line
 static volatile int s_cmd = 0; // 0 none, 1 tap, 2 home, 3 back, 4 shot, 5 info, 6 ping
 static volatile int s_x = 0, s_y = 0;
 static volatile int s_x2 = 0, s_y2 = 0; // swipe end point
-static char s_arg[48];                  // text argument (@@place <query>), copied before queuing
+static char s_arg[64];                  // text argument (@@place <query>), copied before queuing
 
 extern "C" void tdeck_shot_stream_begin(void); // src/TDeckScreenshot.cpp
 
@@ -234,6 +234,18 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 s_cmd = 27;
             } else if (!strcmp(s_line, "openaihealth")) {
                 s_cmd = 28;
+            } else if (!strcmp(s_line, "oauthbegin")) {
+                s_cmd = 30;
+            } else if (!strncmp(s_line, "oauthadd ", 9)) {
+                snprintf(s_arg, sizeof(s_arg), "%s", s_line + 9);
+                s_cmd = 31;
+            } else if (!strncmp(s_line, "oauthend ", 9)) {
+                snprintf(s_arg, sizeof(s_arg), "%s", s_line + 9);
+                s_cmd = 32;
+            } else if (!strcmp(s_line, "oauthinfo")) {
+                s_cmd = 33;
+            } else if (!strcmp(s_line, "oauthcancel")) {
+                s_cmd = 34;
             } else if (!strcmp(s_line, "openaistatus")) {
                 s_cmd = 29;
             } else if (!strncmp(s_line, "place", 5)) {
@@ -423,6 +435,8 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 LOG_INFO("@@err unknown command");
             }
         }
+        if (s_armed && !strncmp(s_line, "oauth", 5))
+            memset(s_line, 0, sizeof(s_line));
         s_len = 0;
         s_armed = false;
         return;
@@ -473,4 +487,9 @@ extern "C" int tdeck_remote_take(int *x, int *y, int *x2, int *y2)
 extern "C" void tdeck_remote_reply(const char *what)
 {
     LOG_INFO("@@ok %s", what ? what : "");
+}
+
+extern "C" void tdeck_remote_clear_arg(void)
+{
+    memset(s_arg, 0, sizeof(s_arg));
 }

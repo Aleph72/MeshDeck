@@ -1,8 +1,8 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
-constexpr uint32_t kFieldVersionCode = 2026112402u;
-#define FIELD_APP_VERSION "2026.11.24.2"
+constexpr uint32_t kFieldVersionCode = 2026112403u;
+#define FIELD_APP_VERSION "2026.11.24.3"
 constexpr const char *kFieldVersion = FIELD_APP_VERSION;
 extern "C" {
 void tdeck_ota_request(void);

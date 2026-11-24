@@ -1,97 +1,74 @@
 #include "graphics/view/TFT/TuiStatusBar.h"
 #include "lvgl.h"
-#include <cstdio>
+#include "util/ChatGPTPlan.h"
 #include <cstring>
-
-namespace tdeckchatgpt
-{
-int state();
-bool haveConfig();
-int configurationResult();
-const char *reply();
-const char *statusText();
-const char *modelName();
-bool ask(const char *);
-bool saveConfig(const char *, const char *);
-void clear();
-} // namespace tdeckchatgpt
 
 namespace
 {
 lv_obj_t *screen = nullptr, *previous = nullptr, *question = nullptr, *answer = nullptr, *status = nullptr;
-lv_obj_t *configPanel = nullptr, *keyArea = nullptr, *modelArea = nullptr, *configStatus = nullptr;
-lv_timer_t *timer = nullptr;
-int lastState = -1, lastConfig = -9;
+lv_obj_t *configPanel = nullptr, *accountLabel = nullptr, *modelLabel = nullptr, *configStatus = nullptr;
+int lastState = -1;
+bool lastReady = false;
 
-lv_obj_t *button(lv_obj_t *parent, const char *text, int x, int y, int w, lv_event_cb_t callback)
+lv_obj_t *label(lv_obj_t *parent, const char *text, int x, int y, int width)
+{
+    lv_obj_t *l = lv_label_create(parent);
+    lv_label_set_text(l, text);
+    lv_obj_set_pos(l, x, y);
+    lv_obj_set_width(l, width);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+    return l;
+}
+lv_obj_t *button(lv_obj_t *parent, const char *text, int x, int y, int width, lv_event_cb_t callback)
 {
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_set_pos(b, x, y);
-    lv_obj_set_size(b, w, 30);
+    lv_obj_set_size(b, width, 30);
     lv_obj_t *l = lv_label_create(b);
     lv_label_set_text(l, text);
     lv_obj_center(l);
     lv_obj_add_event_cb(b, callback, LV_EVENT_CLICKED, nullptr);
     return b;
 }
-
 void send(lv_event_t *)
 {
     if (!tdeckchatgpt::haveConfig()) {
-        lv_label_set_text(status, "Apri Config e inserisci una chiave API.");
+        lv_label_set_text(status, "Apri Account per collegare ChatGPT.");
         return;
     }
     if (tdeckchatgpt::ask(lv_textarea_get_text(question)))
         lv_label_set_text(answer, "");
 }
-
-void save(lv_event_t *)
+void updateAccount()
 {
-    if (tdeckchatgpt::saveConfig(lv_textarea_get_text(keyArea), lv_textarea_get_text(modelArea))) {
-        lv_textarea_set_text(keyArea, "");
-        lv_label_set_text(configStatus, "Salvataggio...");
-    } else {
-        lv_label_set_text(configStatus, "Controlla chiave e modello. Attendi se occupato.");
-    }
+    bool connected = tdeckchatgpt::haveConfig();
+    lv_label_set_text(accountLabel, connected ? tdeckchatgpt::accountName() : "Account non collegato");
+    lv_label_set_text_fmt(modelLabel, "Modello: %s", connected ? tdeckchatgpt::modelName() : "scelto dopo l'accesso");
 }
-
 void openConfig(lv_event_t *)
 {
-    if (tdeckchatgpt::state() == 1 || tdeckchatgpt::configurationResult() == 1)
-        return;
-    lv_textarea_set_text(keyArea, "");
-    lv_textarea_set_placeholder_text(keyArea, tdeckchatgpt::haveConfig() ? "Vuoto = mantieni la chiave salvata"
-                                                                         : "Incolla o digita la chiave API");
-    lv_textarea_set_text(modelArea, tdeckchatgpt::modelName());
-    lv_label_set_text(configStatus, "platform.openai.com/api-keys\nWi-Fi con Internet. Uso API a consumo.");
+    updateAccount();
     lv_obj_remove_flag(configPanel, LV_OBJ_FLAG_HIDDEN);
-    lv_group_focus_obj(keyArea);
 }
-
 void tick(lv_timer_t *)
 {
     if (!screen || lv_screen_active() != screen)
         return;
-    int st = tdeckchatgpt::state();
-    if (st != lastState) {
-        lastState = st;
-        lv_label_set_text(status, st == 0
-                                      ? (tdeckchatgpt::haveConfig() ? "Pronto. Richiede Internet." : "Senza chiave. Apri Config.")
-                                      : tdeckchatgpt::statusText());
-        if (st == 2)
+    int state = tdeckchatgpt::state();
+    bool connected = tdeckchatgpt::haveConfig();
+    if (state != lastState || connected != lastReady) {
+        lastState = state;
+        lastReady = connected;
+        lv_label_set_text(status, state == 0 ? (connected ? "Pronto. Usa il tuo piano ChatGPT." : "Collega ChatGPT da Account.")
+                                             : tdeckchatgpt::statusText());
+        if (state == 2)
             lv_label_set_text(answer, tdeckchatgpt::reply());
-        if (st == 3) {
+        if (state == 3) {
             lv_label_set_text(answer, tdeckchatgpt::statusText());
             lv_label_set_text(status, "Errore. Dettagli sotto.");
         }
-    }
-    int cfg = tdeckchatgpt::configurationResult();
-    if (cfg != lastConfig) {
-        lastConfig = cfg;
-        if (cfg == 2)
-            lv_label_set_text(configStatus, "Salvato sul dispositivo. La chiave non viene mostrata.");
-        if (cfg < 0)
-            lv_label_set_text(configStatus, "Salvataggio non riuscito. Riprova.");
+        updateAccount();
     }
     if (lv_obj_has_flag(configPanel, LV_OBJ_FLAG_HIDDEN)) {
         lv_group_t *g = lv_group_get_default();
@@ -100,7 +77,6 @@ void tick(lv_timer_t *)
     }
 }
 } // namespace
-
 extern "C" void chatgpt_open(void)
 {
     if (!screen) {
@@ -112,11 +88,8 @@ extern "C" void chatgpt_open(void)
             if (previous)
                 lv_screen_load(previous);
         });
-        lv_obj_t *title = lv_label_create(screen);
-        lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-        lv_label_set_text(title, "ChatGPT");
-        lv_obj_set_pos(title, 114, 6);
-        button(screen, "Config", 240, 0, 76, openConfig);
+        label(screen, "ChatGPT", 109, 6, 115);
+        button(screen, "Account", 234, 0, 82, openConfig);
         question = lv_textarea_create(screen);
         lv_obj_set_pos(question, 4, 35);
         lv_obj_set_size(question, 312, 44);
@@ -136,12 +109,7 @@ extern "C" void chatgpt_open(void)
             lv_label_set_text(answer, "");
             lastState = -1;
         });
-        status = lv_label_create(screen);
-        lv_obj_set_style_text_color(status, lv_color_hex(0xffffff), 0);
-        lv_obj_set_pos(status, 6, 118);
-        lv_obj_set_width(status, 308);
-        lv_obj_set_style_text_font(status, LV_FONT_DEFAULT, 0);
-        lv_label_set_long_mode(status, LV_LABEL_LONG_WRAP);
+        status = label(screen, "", 6, 118, 308);
         lv_obj_t *box = lv_obj_create(screen);
         lv_obj_set_style_pad_all(box, 4, 0);
         lv_obj_set_scroll_dir(box, LV_DIR_VER);
@@ -157,50 +125,29 @@ extern "C" void chatgpt_open(void)
         lv_obj_set_style_pad_all(configPanel, 4, 0);
         lv_obj_set_style_bg_color(configPanel, lv_color_hex(0x071525), 0);
         lv_obj_clear_flag(configPanel, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_t *keyLabel = lv_label_create(configPanel);
-        lv_obj_set_style_text_color(keyLabel, lv_color_hex(0xffffff), 0);
-        lv_label_set_text(keyLabel, "Chiave OpenAI API (nascosta)");
-        lv_obj_set_pos(keyLabel, 4, 2);
-        keyArea = lv_textarea_create(configPanel);
-        lv_obj_set_pos(keyArea, 2, 24);
-        lv_obj_set_size(keyArea, 304, 36);
-        lv_textarea_set_one_line(keyArea, true);
-        lv_textarea_set_max_length(keyArea, 511);
-        lv_textarea_set_password_mode(keyArea, true);
-        lv_textarea_set_password_show_time(keyArea, 0);
-        lv_obj_set_style_anim_duration(keyArea, 0, LV_PART_CURSOR);
-        lv_anim_delete(keyArea, nullptr);
-        lv_obj_t *modelLabel = lv_label_create(configPanel);
-        lv_obj_set_style_text_color(modelLabel, lv_color_hex(0xffffff), 0);
-        lv_label_set_text(modelLabel, "Modello");
-        lv_obj_set_pos(modelLabel, 4, 65);
-        modelArea = lv_textarea_create(configPanel);
-        lv_obj_set_pos(modelArea, 2, 87);
-        lv_obj_set_size(modelArea, 304, 36);
-        lv_textarea_set_one_line(modelArea, true);
-        lv_textarea_set_max_length(modelArea, 63);
-        if (lv_group_get_default()) {
-            lv_group_add_obj(lv_group_get_default(), keyArea);
-            lv_group_add_obj(lv_group_get_default(), modelArea);
-        }
-        configStatus = lv_label_create(configPanel);
-        lv_obj_set_style_text_color(configStatus, lv_color_hex(0xffffff), 0);
-        lv_obj_set_pos(configStatus, 4, 127);
-        lv_obj_set_width(configStatus, 300);
-        lv_label_set_long_mode(configStatus, LV_LABEL_LONG_WRAP);
-        button(configPanel, "Salva", 4, 174, 145, save);
-        button(configPanel, "Chiudi", 158, 174, 146, [](lv_event_t *) {
-            lv_textarea_set_text(keyArea, "");
+        label(configPanel, "Account ChatGPT", 4, 0, 304);
+        accountLabel = label(configPanel, "", 4, 26, 300);
+        lv_obj_set_height(accountLabel, 26);
+        lv_label_set_long_mode(accountLabel, LV_LABEL_LONG_DOT);
+        modelLabel = label(configPanel, "", 4, 55, 300);
+        lv_obj_set_height(modelLabel, 24);
+        lv_label_set_long_mode(modelLabel, LV_LABEL_LONG_DOT);
+        configStatus =
+            label(configPanel, "Accesso dal Mac via USB.\nPoi basta il Wi-Fi.\nUso: chatgpt.com/settings/usage", 4, 80, 300);
+        button(configPanel, "Accedi con ChatGPT", 4, 145, 300, [](lv_event_t *) {
+            lv_label_set_text(configStatus, "Apri il collegamento di accesso\nnel browser del Mac collegato.");
+        });
+        button(configPanel, "Esci", 4, 178, 145, [](lv_event_t *) { tdeckchatgpt::disconnect(); });
+        button(configPanel, "Chiudi", 158, 178, 146, [](lv_event_t *) {
             lv_obj_add_flag(configPanel, LV_OBJ_FLAG_HIDDEN);
             lv_group_focus_obj(question);
             lastState = -1;
         });
         lv_obj_add_flag(configPanel, LV_OBJ_FLAG_HIDDEN);
-        timer = lv_timer_create(tick, 300, nullptr);
+        lv_timer_create(tick, 300, nullptr);
     }
     if (lv_screen_active() != screen)
         previous = lv_screen_active();
     lastState = -1;
-    lastConfig = -9;
     lv_screen_load(screen);
 }

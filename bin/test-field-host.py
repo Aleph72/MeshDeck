@@ -76,3 +76,20 @@ with tempfile.TemporaryDirectory(dir=work) as tmp:
         if template == "reply-repeater":
             command.extend([str(args.hearham.resolve()), str(count)])
         subprocess.run(command, check=True)
+
+    cpp = root / "qa/field/siwc-parser.cpp"
+    executable = out / "siwc-parser"
+    subprocess.run(
+        [
+            "clang++",
+            "-std=c++17",
+            *flags,
+            "-I" + str(root / "lib/meshtastic-device-ui/include"),
+            str(cpp),
+            str(out / "cjson.o"),
+            "-o",
+            str(executable),
+        ],
+        check=True,
+    )
+    subprocess.run([str(executable)], check=True)
