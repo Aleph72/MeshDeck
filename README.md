@@ -1,27 +1,27 @@
 # MeshDeck
 
-MeshDeck è un firmware per usare **Meshtastic direttamente dal LILYGO T-Deck Plus**, con un’interfaccia pensata per lo schermo, la tastiera e la trackball del dispositivo. Il progetto nasce da [T-UI](https://github.com/jeeab/t-ui-firmware) e conserva la compatibilità radio con i nodi [Meshtastic](https://meshtastic.org/) configurati sulla stessa rete.
+MeshDeck is firmware for running **Meshtastic directly on the LILYGO T-Deck Plus**, with an interface designed for its screen, keyboard, and trackball. It builds on [T-UI](https://github.com/jeeab/t-ui-firmware) and can exchange messages with [Meshtastic](https://meshtastic.org/) nodes configured for the same mesh.
 
-## Cosa include
+## Features
 
-- **Home personalizzabile** con scorciatoie alle chat, conteggio dei non letti e icone spostabili tra pagine.
-- **Mappe offline** con riquadri salvati su microSD, elenco dei ripetitori HearHam e calcolatrice.
-- **Meteo** con ricerca per città, previsioni a cinque giorni e ultimi dati salvati.
-- **Impostazioni e diagnostica** con suonerie, volume, blocco tastiera e dati sulla memoria.
-- **Italiano, spagnolo e inglese** per la Home, le preferite, il riordino, il menu principale delle impostazioni e il meteo. Le traduzioni delle altre schermate proseguono.
+- **Customizable home screen** with pinned conversations, unread counts, and apps you can move between pages.
+- **Offline maps** with tiles stored on microSD, a HearHam repeater directory, and a calculator.
+- **Weather** with city search, five-day forecasts, and cached results.
+- **Settings and diagnostics** with notification tones, volume control, keyboard lock, and memory statistics.
+- **English, Italian, and Spanish** for the home screen, favorites, app arrangement, main settings, and weather. Other screens are still being translated.
 
-## Hardware e installazione
+## Hardware and installation
 
-Il dispositivo collaudato è il **LILYGO T-Deck Plus con LoRa, ESP32-S3 e 16 MB di flash**. Il T-Deck base è da verificare. Il T-Deck Pro con schermo e-ink richiede un porting dedicato.
+MeshDeck has been tested on the **LILYGO T-Deck Plus with LoRa, ESP32-S3, and 16 MB of flash**. The original T-Deck still needs validation. The T-Deck Pro has an e-ink display and requires a dedicated port.
 
-La versione **2026.11.26.6** è stata provata sul T-Deck Plus. Il flasher web e il canale pubblico degli aggiornamenti sono in preparazione. L’immagine per aggiornare un dispositivo già predisposto e il pacchetto per la prima installazione hanno procedure distinte.
+Version **2026.11.26.6** was tested on the T-Deck Plus. The browser installer and public update channel are in development. A first installation and an update to an existing MeshDeck installation use separate procedures.
 
-## Compilazione e contributi
+## Building and contributing
 
-La build usa Python 3.10+ e PlatformIO con il target `t-deck-tft`. Per la procedura completa, le dipendenze e le verifiche, consulta la [documentazione tecnica in inglese](README.field.md).
+The build uses Python 3.10+ and PlatformIO with the `t-deck-tft` target. See the [technical documentation](README.field.md) for build steps, dependencies, and tests.
 
-Segnalazioni e contributi sono benvenuti. In caso di problema indica il modello del dispositivo, la versione di MeshDeck e i passaggi per riprodurlo.
+Bug reports and contributions are welcome. When reporting an issue, include your device model, MeshDeck version, and steps to reproduce it.
 
-## Licenza e crediti
+## License and credits
 
-MeshDeck è un progetto indipendente basato su T-UI e Meshtastic. I crediti originali sono conservati nel [README di T-UI](README.upstream.md). Il codice è distribuito secondo la [licenza GPL-3.0](LICENSE).
+MeshDeck is an independent project based on T-UI and Meshtastic. The [original T-UI README](README.upstream.md) preserves the upstream credits. MeshDeck is distributed under the [GPL-3.0 license](LICENSE).
