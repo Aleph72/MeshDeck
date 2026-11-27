@@ -27,7 +27,7 @@ extern "C" void tdeck_tls_reserve_take(void);
 
 namespace
 {
-const char *manifestURL = "https://raw.githubusercontent.com/Aleph72/t-ui-firmware/field/ota/stable.json";
+const char *manifestURL = "https://raw.githubusercontent.com/Aleph72/MeshDeck/field/ota/stable.json";
 std::atomic<bool> requested{false}, working{false}, rebootReady{false}, automatic{true};
 std::atomic<int> autoPending{-1};
 std::atomic<unsigned> percent{0};
@@ -107,7 +107,7 @@ bool parseManifest(const char *json, Manifest &m)
               field(root, "chip", "esp32s3") && field(root, "image_type", "app") && u32(root, "version_code", m.version) &&
               u32(root, "size", m.size);
     cJSON *url = cJSON_GetObjectItemCaseSensitive(root, "url"), *hash = cJSON_GetObjectItemCaseSensitive(root, "sha256");
-    const char *prefix = "https://github.com/Aleph72/t-ui-firmware/releases/download/";
+    const char *prefix = "https://github.com/Aleph72/MeshDeck/releases/download/";
     if (!cJSON_IsString(url) || strlen(url->valuestring) >= sizeof(m.url) || strncmp(url->valuestring, prefix, strlen(prefix)) ||
         !strrchr(url->valuestring, '/') || strcmp(strrchr(url->valuestring, '/'), "/firmware-t-deck-plus.bin") ||
         !cJSON_IsString(hash) || strlen(hash->valuestring) != 64)

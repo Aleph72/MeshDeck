@@ -24,6 +24,7 @@ extern "C" bool tdeck_on_home_screen(void); // hold-to-lock, see the hold gestur
 extern "C" bool tdeck_trackball_click_enabled(void);
 // True while the PIN screen is up - see TFTView_320x240.cpp.
 extern "C" bool tdeck_lockscreen_active(void);
+extern "C" bool tdeck_keyboard_lock_active(void);
 
 // When true the screen is dark/locked: trackball *rolls* are swallowed so they can't wake it
 // (only the double-click below wakes). Defined in TFTView_320x240.cpp.
@@ -284,8 +285,14 @@ static void tbIntegrate(void)
     if (spc < 0 || spc > 4)
         spc = 2;
     const float vmax = kVmax[spc];
-    if (tbVx > vmax) tbVx = vmax; else if (tbVx < -vmax) tbVx = -vmax;
-    if (tbVy > vmax) tbVy = vmax; else if (tbVy < -vmax) tbVy = -vmax;
+    if (tbVx > vmax)
+        tbVx = vmax;
+    else if (tbVx < -vmax)
+        tbVx = -vmax;
+    if (tbVy > vmax)
+        tbVy = vmax;
+    else if (tbVy < -vmax)
+        tbVy = -vmax;
 
     if (tbVx == 0.0f && tbVy == 0.0f) {
         tbIntegMs = now;
@@ -393,8 +400,7 @@ static void tb_pointer_read(lv_indev_t *, lv_indev_data_t *data)
     // impossible - so the press is always exactly one read long.
     data->state = tbTapNow ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     tbTapNow = false;
-    if (tbCursorObj && !lv_obj_has_flag(tbCursorObj, LV_OBJ_FLAG_HIDDEN) &&
-        millis() - tbLastMoveMs > kCursorIdleHideMs)
+    if (tbCursorObj && !lv_obj_has_flag(tbCursorObj, LV_OBJ_FLAG_HIDDEN) && millis() - tbLastMoveMs > kCursorIdleHideMs)
         tbCursorShow(false);
 }
 
@@ -514,6 +520,10 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
         data->enc_diff = 0;
         data->state = LV_INDEV_STATE_RELEASED;
 
+        const bool keyboardLocked = tdeck_keyboard_lock_active();
+        if (keyboardLocked)
+            tbClickPendingAt = 0;
+
         // A single click that has now outlived the double-click window is a tap. Resolved here
         // rather than in the block below because it has to fire on a read where nothing at all
         // happened - that is the whole point of waiting.
@@ -554,7 +564,9 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
             //   just double click". Making hold mean Back everywhere was his call and it is
             //   right everywhere except Home, where there is nowhere to go back TO - so the
             //   gesture was simply doing nothing there. Now both of his routes to lock work.
-            if (tdeck_input_gated || tdeck_on_home_screen())
+            if (keyboardLocked)
+                lastClickMs = 0;
+            else if (tdeck_input_gated || tdeck_on_home_screen())
                 tb_home_request = true; // asleep -> wake, on Home -> lock
             else
                 tdeck_back_request = true; // awake, somewhere else -> Back
@@ -594,8 +606,7 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
                 // navigation is not actually running.
                 data->key = LV_KEY_ENTER;
                 data->state = LV_INDEV_STATE_PRESSED;
-            } else if (action == TB_ACTION_PRESSED && tdeck_trackball_nav_enabled() &&
-                       !tdeck_input_gated) {
+            } else if (action == TB_ACTION_PRESSED && tdeck_trackball_nav_enabled() && !tdeck_input_gated && !keyboardLocked) {
                 // Cursor mode, and only while awake. Asleep, a click belongs to the
                 // double-click-to-wake gesture in the branch below - the cursor is not on
                 // screen and cannot be the thing a click means.
@@ -613,7 +624,7 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
                     tbClickPendingAt = 0; // and cancel the single that was waiting
                 } else {
                     lastClickMs = nowMs;
-                    tbClickPendingAt = nowMs;  // a tap, unless a second click arrives
+                    tbClickPendingAt = nowMs; // a tap, unless a second click arrives
                 }
             } else if (action == TB_ACTION_PRESSED) {
                 // Cursor off: the click never selects (selection is by touch). It only feeds
@@ -622,7 +633,7 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
                 // Generous window: two clicks within 1.5s count as a double-click. The stiff
                 // trackball in Jake's 3D case makes fast double-clicks hard; single-click has
                 // no action so a wide window costs nothing.
-                if (nowMs - lastClickMs < 1500) {
+                if (lastClickMs && nowMs - lastClickMs < 1500) {
                     tb_home_request = true; // second click within window -> Home (+ wake)
                     lastClickMs = 0;        // reset so a 3rd click starts a fresh pair
                 } else {
@@ -630,15 +641,14 @@ void EncoderInputDriver::encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
                 }
             }
             // Trackball ROLL is inert by DEFAULT: all navigation/selection is by touch, and
-            // UP/DOWN/LEFT/RIGHT are consumed here with no output — only the button double-click
+            // UP/DOWN/LEFT/RIGHT are consumed here with no output - only the button double-click
             // above drives Home / lock / wake. That is a deliberate choice, not a dead trackball,
             // but it looks identical to broken hardware from the outside (t-ui-firmware#1), so
             // Settings -> Trackball navigation turns rolling back on for people who want it.
             // Switched on, a roll emits the ordinary LVGL arrow keys, which is what used to move
             // the focus highlight and flip launcher pages.
             // Rolling moves the cursor, when the user has asked for it.
-            if (tdeck_trackball_nav_enabled() && action != TB_ACTION_PRESSED &&
-                action != TB_ACTION_NONE) {
+            if (tdeck_trackball_nav_enabled() && action != TB_ACTION_PRESSED && action != TB_ACTION_NONE) {
                 // Only bring the cursor into existence. The pulses themselves were already
                 // counted by the interrupts and get integrated once per frame - reacting to
                 // them HERE is exactly what made every single event a jump.

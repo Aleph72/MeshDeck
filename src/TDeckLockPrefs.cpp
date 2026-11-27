@@ -20,7 +20,7 @@
 // filesystem write from the UI (LVGL) task is what froze this device when the time-zone
 // dropdown first tried it. NVS has its own lock and is safe to write from a handler.
 // -----------------------------------------------------------------------------
-#include <Arduino.h>   // millis()
+#include <Arduino.h> // millis()
 #include <Preferences.h>
 
 // Lock modes. Deliberately ordered least-secure to most, so the Settings button can
@@ -265,4 +265,25 @@ extern "C" void tdeck_lock_set_unlock_key(int k)
         p.putUChar("ukey", (uint8_t)k);
         p.end();
     }
+}
+
+static bool &keyboardLockPreference()
+{
+    static bool enabled = [] {
+        Preferences prefs;
+        return prefs.begin("tdecklock", true) && prefs.getBool("lockkbd", false);
+    }();
+    return enabled;
+}
+
+extern "C" bool tdeck_lock_keyboard_enabled(void)
+{
+    return keyboardLockPreference();
+}
+
+extern "C" void tdeck_lock_set_keyboard_enabled(bool enabled)
+{
+    Preferences prefs;
+    if (prefs.begin("tdecklock", false) && prefs.putBool("lockkbd", enabled) != 0)
+        keyboardLockPreference() = enabled;
 }

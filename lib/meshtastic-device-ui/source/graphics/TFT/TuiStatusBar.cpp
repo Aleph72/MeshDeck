@@ -1,3 +1,4 @@
+#include "util/FieldLocale.h"
 // -----------------------------------------------------------------------------
 // The persistent top bar. See TuiStatusBar.h for the design and why it is opt-in.
 //
@@ -60,7 +61,7 @@ void tui_statusbar_init(void)
 
     notifLbl = lv_label_create(bar);
     lv_obj_set_style_text_font(notifLbl, &ui_font_montserrat_12, LV_PART_MAIN);
-    lv_label_set_text(notifLbl, "Notifications");
+    lv_label_set_text(notifLbl, fieldText("Notifications", "Notifiche", "Avisos"));
     lv_obj_align(notifLbl, LV_ALIGN_LEFT_MID, 6, 0);
     // The label itself is the button - a real lv_btn would not fit in 20px with its padding,
     // and there is nothing else up here to mis-tap. The hit area is widened below.
@@ -139,7 +140,7 @@ void tui_statusbar_tick(void)
     char buf[24];
     const int unread = notif_count();
     if (unread == 0)
-        snprintf(buf, sizeof(buf), "Notifications");
+        snprintf(buf, sizeof(buf), "%s", fieldText("Notifications", "Notifiche", "Avisos"));
     else if (unread == 1)
         snprintf(buf, sizeof(buf), "1 msg");
     else

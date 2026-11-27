@@ -42,6 +42,7 @@
 #include "TDeckCoverage.h" // @@cov
 #include "TDeckGemini.h"   // @@gem - ask it headlessly, no unlock needed
 #include "TDeckMail.h"     // @@mail / @@inbox
+#include "TDeckNotificationTone.h"
 #include "configuration.h"
 #include "graphics/common/SdCard.h"     // @@mailfile reads /gmail.txt
 #include <lvgl.h>                       // @@refr needs the refresh timer
@@ -218,6 +219,22 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                 }
             } else if (!strcmp(s_line, "localstatus")) {
                 s_cmd = 20;
+            } else if (!strncmp(s_line, "tone ", 5)) {
+                int tone;
+                if (sscanf(s_line + 5, "%d", &tone) == 1 && tone >= 0 && tone <= 3) {
+                    tdeck_notification_tone_set(tone);
+                    LOG_INFO("@@ok tone queued=%d", tone);
+                }
+            } else if (!strcmp(s_line, "tonetest")) {
+                tdeck_notification_tone_test();
+                LOG_INFO("@@ok tonetest queued");
+            } else if (!strcmp(s_line, "tonestatus")) {
+                char status[128];
+                tdeck_notification_tone_status(status, sizeof(status));
+                LOG_INFO("@@ok tonestatus %s", status);
+            } else if (!strcmp(s_line, "notifytest")) {
+                tdeck_notification_test_message();
+                LOG_INFO("@@ok notifytest queued locally");
             } else if (!strcmp(s_line, "soundtest")) {
                 s_cmd = 21;
             } else if (!strcmp(s_line, "otastatus")) {
@@ -373,6 +390,8 @@ extern "C" void tdeck_remote_feed(uint8_t c)
                     which = 16;
                 else if (!strncmp(a, "updates", 7))
                     which = 17;
+                else if (!strncmp(a, "weather", 7) || !strncmp(a, "meteo", 5))
+                    which = 18;
                 if (which > 0) {
                     s_x = which;
                     s_cmd = 9;

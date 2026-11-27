@@ -60,7 +60,7 @@ class AudioThread : public concurrency::OSThread
 #endif
     }
 
-    // Set output gain (0.0–1.0+). Default is 0.2; the timer alarm cranks this up
+    // Set output gain (0.0-1.0+). Default is 0.2; the timer alarm cranks this up
     // for a much louder beep, then restores it. >1.0 clips (harsher, even louder).
     void setGain(float g)
     {
@@ -90,6 +90,7 @@ class AudioThread : public concurrency::OSThread
     }
 
     bool wavPlaying() const { return i2sWav != nullptr; }
+    bool rtttlPlaying() const { return i2sRtttl && i2sRtttl->isRunning(); }
 
     void readAloud(const char *text)
     {

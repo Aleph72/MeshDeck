@@ -64,7 +64,7 @@ manifest = {
     "image_type": "app",
     "size": len(image),
     "sha256": hashlib.sha256(image).hexdigest(),
-    "url": f"https://github.com/Aleph72/t-ui-firmware/releases/download/{a.tag}/firmware-t-deck-plus.bin",
+    "url": f"https://github.com/Aleph72/MeshDeck/releases/download/{a.tag}/firmware-t-deck-plus.bin",
     "source_commit": subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip(),

@@ -1,60 +1,119 @@
-// -----------------------------------------------------------------------------
-// TDeckPop - the new-message "pop".
-//
-// Jake, 2026-09-18: "can you add a classic facebook pop notification sound?"
-// The sound itself is synthesised, not Facebook's file; see tools/make_pop.py.
-//
-// THREADING, which is the whole reason this is a file and not two lines:
-//
-// A new message is handled on the "tft" task, and tftSetup.cpp holds the SPI LOCK across the
-// whole of that task's work: lock -> deviceScreen->task_handler() -> unlock. The display, the
-// SD card and the LoRa radio share one SPI bus, so anything slow done under that lock is time
-// the radio spends waiting. The device's own diagnostics recorded ten stalls of about 24
-// seconds each with thread=RadioIf waiting on lock=tft, and those stalls are what reboot it.
-//
-// The existing tone path (buzz.cpp playTonesRTTTL) spins on
-// `while (audioThread->isPlaying()) delay(10)`, so calling it from there would hold the bus
-// for the length of the sound. Actively harmful.
-//
-// So: notif_add() (or anyone else) calls tdeck_pop_request(), which only sets a flag.
-// tdeck_pop_service() runs on the MAIN loop - a different task, not holding that lock -
-// starts the WAV and returns immediately; AudioThread::runOnce() pumps it to the end.
-// Nothing waits for the sound. Same deferred-service shape as TDeckBeep / TDeckGpsBridge.
-// -----------------------------------------------------------------------------
+#include "TDeckNotificationTone.h"
 #include "main.h"
-#include "mesh/NodeDB.h" // config.device.buzzer_mode
-
+#include "mesh/NodeDB.h"
+#include <Preferences.h>
+#include <atomic>
+#include <cstdio>
 #ifdef HAS_I2S
 #include "AudioThread.h"
+#include "NotificationToneWav.h"
+#include "modules/ExternalNotificationModule.h"
 #include "pop_wav.h"
 #endif
 
-static volatile bool s_popPending = false;
+static std::atomic<int> s_tone{0};
+static std::atomic<int> s_pendingTone{-1};
+static std::atomic<bool> s_popPending{false};
+static std::atomic<bool> s_messageTest{false};
+static bool s_loaded = false;
+static unsigned s_played = 0, s_muted = 0, s_busy = 0;
+extern "C" int tdeck_volume_get(void);
+extern "C" bool tdeck_alarm_ringing(void);
 
-// Callable from ANY task. Records intent and nothing else.
-extern "C" void tdeck_pop_request(void)
+extern "C" int tdeck_notification_tone_get(void)
 {
-    s_popPending = true;
+    return s_tone.load();
+}
+extern "C" void tdeck_notification_tone_set(int tone)
+{
+    if (tone >= 0 && tone <= 3)
+        s_pendingTone.store(tone);
+}
+extern "C" bool tdeck_notification_uses_preset(void)
+{
+    return s_tone.load() != 0;
+}
+extern "C" void tdeck_notification_request(void)
+{
+    s_popPending.store(true);
+}
+extern "C" void tdeck_notification_tone_test(void)
+{
+    s_popPending.store(true);
+}
+extern "C" void tdeck_notification_test_message(void)
+{
+    s_messageTest.store(true);
 }
 
-// Main loop only.
+extern "C" void tdeck_pop_request(void)
+{
+    // Presets are triggered by Meshtastic, which already applies channel/DM mute rules.
+    if (!tdeck_notification_uses_preset())
+        s_popPending.store(true);
+}
+
+extern "C" void tdeck_notification_tone_status(char *out, size_t cap)
+{
+    snprintf(out, cap, "tone=%d saved=%d volume=%d muted=%d played=%u suppressed=%u busy=%u", s_tone.load(),
+             s_pendingTone.load() == -1, tdeck_volume_get(),
+             config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED, s_played, s_muted, s_busy);
+}
+
 extern "C" void tdeck_pop_service(void)
 {
-    if (!s_popPending)
+    if (!s_loaded) {
+        Preferences prefs;
+        if (prefs.begin("tui-audio", true)) {
+            int tone = prefs.getUChar("ringtone", 0);
+            s_tone.store(tone <= 3 ? tone : 0);
+            prefs.end();
+        }
+        s_loaded = true;
+    }
+    int tone = s_pendingTone.load();
+    if (tone >= 0) {
+        Preferences prefs;
+        if (prefs.begin("tui-audio", false)) {
+            bool saved = prefs.putUChar("ringtone", tone) == 1;
+            prefs.end();
+            if (saved) {
+                s_tone.store(tone);
+                s_pendingTone.compare_exchange_strong(tone, -1);
+            }
+        }
+    }
+#if defined(HAS_I2S) && defined(T_DECK)
+    if (s_messageTest.exchange(false) && externalNotificationModule)
+        externalNotificationModule->testNotification();
+#endif
+    if (!s_popPending.exchange(false))
         return;
-    s_popPending = false;
-
+    if (config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED || tdeck_volume_get() == 0) {
+        ++s_muted;
+        return;
+    }
 #ifdef HAS_I2S
-    // One switch governs every sound on the device (Settings > Sound drives Meshtastic's
-    // own buzzer_mode - see TDeckBeep.cpp). DISABLED means silent. NOTIFICATIONS_ONLY
-    // still pops, because a notification is precisely what this is.
-    if (config.device.buzzer_mode == meshtastic_Config_DeviceConfig_BuzzerMode_DISABLED)
-        return;
     if (!audioThread)
         return;
-    // Don't cut across a ringtone or an alarm that is already sounding.
-    if (audioThread->wavPlaying())
+    if (audioThread->wavPlaying() || audioThread->rtttlPlaying() || tdeck_alarm_ringing()) {
+        ++s_busy;
         return;
-    audioThread->beginWav(kPopWav, kPopWavLen);
+    }
+    switch (s_tone.load()) {
+    case 1:
+        audioThread->beginWav(kNotificationTone1, sizeof(kNotificationTone1));
+        break;
+    case 2:
+        audioThread->beginWav(kNotificationTone2, sizeof(kNotificationTone2));
+        break;
+    case 3:
+        audioThread->beginWav(kNotificationTone3, sizeof(kNotificationTone3));
+        break;
+    default:
+        audioThread->beginWav(kPopWav, kPopWavLen);
+        break;
+    }
+    ++s_played;
 #endif
 }

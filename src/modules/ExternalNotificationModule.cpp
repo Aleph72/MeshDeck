@@ -23,6 +23,9 @@
 #include "main.h"
 #include "mesh/generated/meshtastic/rtttl.pb.h"
 #include <Arduino.h>
+#ifdef T_DECK
+#include "TDeckNotificationTone.h"
+#endif
 
 #if defined(HAS_RGB_LED)
 #include "AmbientLightingThread.h"
@@ -136,7 +139,11 @@ int32_t ExternalNotificationModule::runOnce()
 
         // Play RTTTL over i2s audio interface if enabled as buzzer
 #ifdef HAS_I2S
-        if (moduleConfig.external_notification.use_i2s_as_buzzer) {
+        if (moduleConfig.external_notification.use_i2s_as_buzzer
+#ifdef T_DECK
+            && !tdeck_notification_uses_preset()
+#endif
+        ) {
             if (audioThread->isPlaying()) {
                 // Continue playing
             } else if (isNagging && (nagCycleCutoff >= millis())) {
@@ -460,7 +467,12 @@ ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshP
                     // Buzz if buzzer mode is not in DIRECT_MSG_ONLY or is DM to us
                     if (moduleConfig.external_notification.use_i2s_as_buzzer) {
 #ifdef HAS_I2S
-                        audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
+#ifdef T_DECK
+                        if (tdeck_notification_uses_preset())
+                            tdeck_notification_request();
+                        else
+#endif
+                            audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
 #endif
                     } else if (moduleConfig.external_notification.use_pwm) {
                         rtttl::begin(config.device.buzzer_gpio, rtttlConfig.ringtone);
@@ -546,3 +558,19 @@ int ExternalNotificationModule::handleInputEvent(const InputEvent *event)
     }
     return 0;
 }
+
+#ifdef T_DECK
+void ExternalNotificationModule::testNotification()
+{
+    // Local diagnostic only: no radio packet is sent.
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_default;
+    packet.from = nodeDB->getNodeNum() ^ 0x01000000;
+    packet.to = UINT32_MAX;
+    packet.channel = 0;
+    packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    packet.decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
+    packet.decoded.payload.bytes[0] = 'T';
+    packet.decoded.payload.size = 1;
+    handleReceived(packet);
+}
+#endif

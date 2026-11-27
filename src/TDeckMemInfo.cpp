@@ -19,6 +19,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <esp_system.h>
+#include <esp_timer.h>
 #include <string.h> // strncmp
 #include <time.h>   // gmtime_r
 
@@ -39,6 +40,16 @@ extern "C" uint32_t tdeck_free_heap(void)
 extern "C" uint32_t tdeck_min_free_heap(void)
 {
     return ESP.getMinFreeHeap();
+}
+
+extern "C" uint32_t tdeck_largest_free_heap(void)
+{
+    return ESP.getMaxAllocHeap();
+}
+
+extern "C" uint64_t tdeck_uptime_seconds(void)
+{
+    return static_cast<uint64_t>(esp_timer_get_time()) / 1000000ULL;
 }
 
 extern "C" uint32_t tdeck_free_psram(void)

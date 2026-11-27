@@ -68,6 +68,9 @@ class ExternalNotificationModule : public SinglePortModule, private concurrency:
     void setMute(bool mute) { isSilenced = mute; }
     bool getMute() { return isSilenced; }
 
+#ifdef T_DECK
+    void testNotification();
+#endif
     bool canBuzz();
     bool nagging();
 
